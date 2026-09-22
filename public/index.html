@@ -157,6 +157,17 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .section-row .section{margin:0}
 
 .table-panels{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:0;overflow:hidden}.table-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.table-panel .mini{flex:1;min-height:0}.drawer-top{display:grid;grid-template-columns:1fr auto;gap:7px}.drawer-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.drawer-tools .rec{padding:6px 9px;display:flex;gap:12px;align-items:center}.drawer-tools .rec-row{margin:0;font-size:11px;gap:4px}.chart-box{height:170px;min-height:150px}.chart-tools{margin:0 0 4px}.metric-line{margin:0;display:flex;gap:5px;flex-wrap:nowrap;overflow:hidden}.metric-pill{padding:4px 7px;font-size:9px;white-space:nowrap}.market-note{font-size:10px;padding:6px 8px}.drawer .btn-sm{margin:0}.drawer .stat{padding:6px}.drawer .stat .lbl{font-size:9px}.drawer .stat .val{font-size:13px}
+.sell-calc{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:9px 10px;margin-top:7px}
+.sell-calc-title{font-size:10px;text-transform:uppercase;color:var(--muted);margin-bottom:7px;font-weight:600}
+.sell-calc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.sell-calc label{font-size:9px;color:var(--muted);display:block;margin-bottom:3px}
+.sell-calc input{width:100%;background:var(--panel);border:1px solid var(--border);color:var(--text);padding:6px 7px;border-radius:6px;font-size:11px}
+.sell-calc input:focus{outline:none;border-color:var(--neon);box-shadow:0 0 0 2px var(--glow)}
+.sell-calc .sc-result{font-weight:700;color:var(--neon2);font-size:12px;padding-top:5px}
+.sell-calc .sc-net{color:var(--green)}
+.sell-calc .sc-fee{color:var(--yellow)}
+@media(max-width:700px){.sell-calc-grid{grid-template-columns:1fr 1fr}}
+
 .drawer-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)}
 .drawer-head .icon,.drawer-head .icon-ph{width:52px;height:52px;min-width:52px;min-height:52px;border-radius:10px;background:var(--card);border:1px solid rgba(255,42,42,.1);background-repeat:no-repeat;background-position:center;background-size:contain;pointer-events:none;user-select:none}
 .drawer-head .icon-ph{display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--muted);font-size:18px}
@@ -1104,7 +1115,19 @@ async function openItem(id,silent){
       ${profit!=null?`<div class="stat" style="margin-bottom:12px"><div class="lbl">Потенциал: купить по мин. → продать по ориентиру (после 5%)</div>
         <div class="val ${profit>=0?"g":"r"}">${profit>=0?"+":""}${fmt(profit)} (${profitPct>=0?"+":""}${Number(profitPct).toFixed(1)}%)</div></div>`:""}
       <div class="drawer-top">
-        <div class="market-note"><b>${st.enoughSales?"Рыночный ориентир":"Недостаточно продаж для надёжного рынка"}</b> · ${esc(srcNote)}</div>
+        <div>
+          <div class="market-note"><b>${st.enoughSales?"Рыночный ориентир":"Недостаточно продаж для надёжного рынка"}</b> · ${esc(srcNote)}</div>
+          <div class="sell-calc" id="sellCalc">
+            <div class="sell-calc-title">Выставление на аукцион · комиссия 5%</div>
+            <div class="sell-calc-grid">
+              <div><label>Цена за 1 шт.</label><input id="scPrice" type="text" inputmode="decimal" placeholder="Цена"></div>
+              <div><label>Количество</label><input id="scQty" type="text" inputmode="numeric" value="1"></div>
+              <div><label>Комиссия</label><div class="sc-result sc-fee" id="scFee">—</div></div>
+              <div><label>Получишь после комиссии</label><div class="sc-result sc-net" id="scNet">—</div></div>
+            </div>
+            <div class="sub" id="scReverse" style="margin-top:5px">Чтобы получить нужную сумму после комиссии, введи цену за 1 шт.</div>
+          </div>
+        </div>
         <div class="drawer-tools"><div class="rec"><div class="rec-row"><span>Покупать до</span><b>${fmt(buyTo)}</b></div><div class="rec-row"><span>Быстрая</span><b>${fmt(sellFast)}</b></div><div class="rec-row"><span>По рынку</span><b>${fmt(sellMarket)}</b></div></div><button class="btn-sm" id="addToCalc">+ В калькулятор</button></div>
       </div>
       <div><div class="section">График продаж</div><div class="chart-tools" id="chartTools"><button class="chart-tool active" data-days="1">Сегодня</button><button class="chart-tool" data-days="2">Вчера+сегодня</button><button class="chart-tool" data-days="7">7 дней</button><button class="chart-tool" data-days="30">30 дней</button><button class="chart-tool" data-days="all">Всё</button></div><div class="chart-box" id="chartBox">${chart}</div></div>
@@ -1113,6 +1136,18 @@ async function openItem(id,silent){
         <div class="table-panel"><div class="section">Последние продажи (${history.length})</div>${histHtml}</div>
       </div>`;
     document.querySelectorAll("#chartTools .chart-tool").forEach(btn=>btn.onclick=()=>{document.querySelectorAll("#chartTools .chart-tool").forEach(x=>x.classList.remove("active"));btn.classList.add("active");$("chartBox").innerHTML=renderSaleChart(btn.dataset.days)});
+    const scPrice=$("scPrice"),scQty=$("scQty"),scFee=$("scFee"),scNet=$("scNet"),scReverse=$("scReverse");
+    const updateSellCalc=()=>{
+      const price=calcNum(scPrice?.value),qtyRaw=calcNum(scQty?.value),qty=Number.isFinite(qtyRaw)&&qtyRaw>0?qtyRaw:1;
+      if(!Number.isFinite(price)||price<0){if(scFee)scFee.textContent="—";if(scNet)scNet.textContent="—";if(scReverse)scReverse.textContent="Чтобы получить нужную сумму после комиссии, введи цену за 1 шт.";return}
+      const gross=price*qty,fee=gross*.05,net=gross-fee,need=price/.95;
+      if(scFee)scFee.textContent=fmt(fee);
+      if(scNet)scNet.textContent=fmt(net);
+      if(scReverse)scReverse.innerHTML=`Выставление: <b>${fmt(gross)}</b> · после 5%: <b style="color:var(--green)">${fmt(net)}</b> · чтобы получить ${fmt(price)} / шт. чистыми → выставить <b style="color:var(--neon2)">${fmt(need)} / шт.</b>`;
+    };
+    if(scPrice){scPrice.value=sellMarket!=null?String(Math.round(sellMarket)):"";scPrice.oninput=()=>{scPrice.value=scPrice.value.replace(/[^0-9.,]/g,"");updateSellCalc()}}
+    if(scQty)scQty.oninput=()=>{scQty.value=scQty.value.replace(/[^0-9]/g,"");updateSellCalc()};
+    updateSellCalc();
     const addBtn=$("addToCalc");
     if(addBtn)addBtn.onclick=()=>{if(!calcIds.includes(id))calcIds.push(id);saveCalc();rightTab="calc";
       document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab==="calc"));
