@@ -248,6 +248,11 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   .pcard-icon{width:52px;height:52px}
   .cat-cards{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
 }
+
+/* Stable lot images: no letter placeholder and no layout jump while icons load. */
+.pcard-icon img,.fav-icon img,.drawer-head .icon{display:block;width:100%;height:100%;object-fit:contain}
+.pcard-icon img{visibility:hidden}
+.pcard-icon{contain:layout paint}
 </style>
 </head>
 <body>
@@ -551,7 +556,7 @@ function renderHunt(){
 }
 const QLT_RU={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
 const CAT_RU={armor:"Броня",armour:"Броня",armor_style:"Стили брони",artefact:"Артефакты",attachment:"Обвесы",backpacks:"Рюкзаки",consumables:"Расходники",containers:"Контейнеры",device:"Устройства",misc:"Разное",other:"Прочее",weapon:"Оружие",weapon_modules:"Модули оружия",weapon_style:"Стили оружия"};
-function fmt(n){if(n==null||!isFinite(n))return"—";if(n>=1e9)return(n/1e9).toFixed(2)+" млрд ₽";if(n>=1e6)return(n/1e6).toFixed(1)+" млн ₽";return Math.round(n).toLocaleString("ru-RU")+" ₽"}
+function fmt(n){if(n==null||!isFinite(n))return"—";const x=Number(n);if(Number.isInteger(x))return x.toLocaleString("ru-RU")+" ₽";return x.toLocaleString("ru-RU",{maximumFractionDigits:2})+" ₽"}
 function fmtN(n){return(n==null||!isFinite(n))?"—":Number(n).toLocaleString("ru-RU")}
 function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
 function norm(s){return String(s||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/gi," ").replace(/\s+/g," ").trim()}
@@ -574,47 +579,28 @@ function lev(a,b){
 }
 // fuzzy score: higher = better match. 0 = no match
 function fuzzyScore(query,name,id){
-  const q=norm(query);if(!q)return 1;
-  const n=norm(name), i=norm(id);
-  if(!n&&!i)return 0;
-  // exact / substring
+  const q=norm(query); if(!q)return 1;
+  const n=norm(name), i=norm(id); if(!n&&!i)return 0;
   if(n===q||i===q)return 100;
-  if(n.includes(q)||i.includes(q))return 90-Math.min(20,Math.abs(n.length-q.length));
-  const qTokens=q.split(" ").filter(Boolean);
-  const nTokens=n.split(" ").filter(Boolean);
-  // all tokens found as substrings (any order, missing ok if at least half match)
-  let tokHits=0,tokScore=0;
+  if(n.includes(q)||i.includes(q))return 90;
+  const qTokens=q.split(" ").filter(Boolean), nTokens=n.split(" ").filter(Boolean);
+  let matched=0,score=0;
   for(const qt of qTokens){
     let best=0;
     for(const nt of nTokens){
-      if(nt.includes(qt)||qt.includes(nt)){best=Math.max(best,30);continue}
-      const d=lev(qt,nt);
-      const maxL=Math.max(qt.length,nt.length)||1;
-      if(d<=1&&maxL>=3)best=Math.max(best,22);
-      else if(d<=2&&maxL>=5)best=Math.max(best,14);
-      else if(d/maxL<=0.34)best=Math.max(best,10);
-    }
-    // also against full name
-    if(!best){
-      if(n.includes(qt))best=18;
-      else{
-        const d=lev(qt,n.slice(0,Math.max(qt.length+2,n.length)));
-        if(qt.length>=3&&d<=2)best=12;
+      if(nt===qt){best=Math.max(best,70);continue}
+      if(nt.startsWith(qt)||qt.startsWith(nt)){
+        const ratio=Math.min(qt.length,nt.length)/Math.max(qt.length,nt.length);
+        if(ratio>=0.75)best=Math.max(best,45);
+        continue;
       }
+      const d=lev(qt,nt), maxL=Math.max(qt.length,nt.length)||1;
+      if(qt.length>=4&&d<=1)best=Math.max(best,32);
+      else if(qt.length>=6&&d<=2&&d/maxL<=0.30)best=Math.max(best,24);
     }
-    if(best){tokHits++;tokScore+=best}
+    if(best){matched++;score+=best}
   }
-  if(qTokens.length&&tokHits>=Math.ceil(qTokens.length*0.5)){
-    return tokScore+tokHits*5+(tokHits===qTokens.length?15:0);
-  }
-  // whole-string edit distance for short queries
-  if(q.length>=3){
-    const dN=lev(q,n),dI=lev(q,i);
-    const d=Math.min(dN,dI);
-    const maxL=Math.max(q.length,Math.min(n.length||99,i.length||99))||1;
-    if(d<=2||d/maxL<=0.3)return 40-d*5;
-  }
-  return 0;
+  return qTokens.length&&matched===qTokens.length ? score+matched*8 : 0;
 }
 function fuzzyFilter(list,query,limit){
   const q=(query||"").trim();
@@ -669,11 +655,9 @@ function statusBadge(row){
 }
 function iconUrl(id){return id?`/api/icon/${encodeURIComponent(id)}`:""}
 function iconHtml(id,name){
-  const letter=(name||id||"?")[0];
   return `<img src="${iconUrl(id)}" alt="" loading="lazy" decoding="async"
-    onload="this.style.display='block';const p=this.parentNode.querySelector('.ph');if(p)p.style.display='none'"
-    onerror="this.style.display='none';const p=this.parentNode.querySelector('.ph');if(p)p.style.display='flex'">
-    <div class="ph">${letter}</div>`;
+    onerror="this.style.visibility='hidden'"
+    onload="this.style.visibility='visible'">`;
 }
 function renderCards(){
   const q=($("q").value||"").trim().toLowerCase();
