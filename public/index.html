@@ -347,7 +347,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <div class="row"><span>Общая сумма покупки</span><b id="sumBuy">—</b></div>
         </div>
         <div class="calc-sum" id="calcSellSummary" style="display:none">
-          <div class="row"><span>Продажа игроку</span><b id="sumPlayer">—</b></div>
+          <div class="row"><span>Общая цена продажи игроку</span><b id="sumPlayer">—</b></div>
           <div class="row"><span>Продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
         </div>
       </div>
@@ -893,8 +893,8 @@ function calcState(){
 }
 function recalcCalc(){
   const state=calcState();
-  let totalBuy=0,totalPlayer=0,totalAuctionNet=0;
-  let hasBuy=false,hasPlayer=false,hasAuction=false;
+  let totalBuy=0,totalSale=0,totalAuctionNet=0;
+  let hasBuy=false,hasSale=false,hasAuction=false;
 
   for(const id of calcIds){
     const price=calcNum(state.prices[id]);
@@ -915,24 +915,25 @@ function recalcCalc(){
       }
     }else{
       if(validQty&&validPrice){
-        const player=price*qty;
-        const auctionNet=player*0.95;
-        totalPlayer+=player;
+        const saleTotal=price;
+        const unit=saleTotal/qty;
+        const auctionNet=saleTotal*0.95;
+        totalSale+=saleTotal;
         totalAuctionNet+=auctionNet;
-        hasPlayer=true;hasAuction=true;
+        hasSale=true;hasAuction=true;
         const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
         if(tr){
-          const playerEl=tr.querySelector(".calc-player");
+          const unitEl=tr.querySelector(".calc-unit");
           const auctionEl=tr.querySelector(".calc-auction");
-          if(playerEl)playerEl.textContent=fmt(player);
+          if(unitEl)unitEl.textContent=Number.isFinite(unit)?fmt(unit):"—";
           if(auctionEl)auctionEl.textContent=fmt(auctionNet);
         }
       }else{
         const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
         if(tr){
-          const playerEl=tr.querySelector(".calc-player");
+          const unitEl=tr.querySelector(".calc-unit");
           const auctionEl=tr.querySelector(".calc-auction");
-          if(playerEl)playerEl.textContent="—";
+          if(unitEl)unitEl.textContent="—";
           if(auctionEl)auctionEl.textContent="—";
         }
       }
@@ -940,7 +941,7 @@ function recalcCalc(){
   }
 
   $("sumBuy").textContent=hasBuy?fmt(totalBuy):"—";
-  $("sumPlayer").textContent=hasPlayer?fmt(totalPlayer):"—";
+  $("sumPlayer").textContent=hasSale?fmt(totalSale):"—";
   $("sumAuctionNet").textContent=hasAuction?fmt(totalAuctionNet):"—";
 }
 function updateCalcMode(){
@@ -952,7 +953,7 @@ function updateCalcMode(){
     :"Отдельный расчёт продажи: игроку и на аукционе −5% комиссии";
   $("calcHead").innerHTML=buy
     ? '<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>'
-    : '<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Игроку</th><th>Аукцион −5%</th><th></th>';
+    : '<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';
   $("calcBuySummary").style.display=buy?"block":"none";
   $("calcSellSummary").style.display=buy?"none":"block";
 }
@@ -982,9 +983,9 @@ function renderCalc(){
         <td class="calc-unit">—</td>
         <td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`
       : `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
-        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td>
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td>
         <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td>
-        <td class="calc-player">—</td>
+        <td class="calc-unit">—</td>
         <td class="calc-auction">—</td>
         <td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
   }).join("");
