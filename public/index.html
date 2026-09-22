@@ -337,22 +337,19 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
         <div class="calc-mode" style="display:flex;gap:8px;margin:0 0 10px">
           <button type="button" class="chart-tool active" id="calcBuyMode">Покупка</button>
           <button type="button" class="chart-tool" id="calcSellMode">Продажа</button>
-          <span id="calcModeHint" style="align-self:center;color:var(--muted);font-size:11px">Ввод: количество → цена всего → цена за 1 шт.</span>
+          <span id="calcModeHint" style="align-self:center;color:var(--muted);font-size:11px">Отдельный расчёт покупки</span>
         </div>
         <table class="calc-table">
-          <thead><tr id="calcHead"><th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Моя цена / шт.</th><th>Аукцион / шт.</th><th>Разница</th><th></th></tr></thead>
+          <thead><tr id="calcHead"><th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th></tr></thead>
           <tbody id="calcBody"></tbody>
         </table>
-        <div class="calc-sum">
-          <div class="row"><span>Сумма моих цен</span><b id="sumMy">—</b></div>
-          <div class="row"><span>Сумма аукциона</span><b id="sumAuc">—</b></div>
-          <div class="row"><span>Разница</span><b id="sumDiff">—</b></div>
-          <div class="row"><span>После комиссии 5% (если купить по аукциону и продать по моей)</span><b id="sumNet">—</b></div>
+        <div class="calc-sum" id="calcBuySummary">
+          <div class="row"><span>Общая сумма покупки</span><b id="sumBuy">—</b></div>
         </div>
-        <div class="calc-sum calc-trade-sum">
-      <div class="section" style="margin-top:0">Трейд с игроком — каждый предмет отдельно</div>
-      <div id="tradeRows"></div>
-    </div>
+        <div class="calc-sum" id="calcSellSummary" style="display:none">
+          <div class="row"><span>Продажа игроку</span><b id="sumPlayer">—</b></div>
+          <div class="row"><span>Продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
+        </div>
       </div>
     </div>
   </div>
@@ -372,8 +369,11 @@ const $=id=>document.getElementById(id);
 let rows=[],filter="all",sortBy="new",activeId=null,catFilter="",rightTab="catalog";
 let activeCategory=null;
 let calcIds=JSON.parse(localStorage.getItem("sz_calc")||"[]");
-let calcPrices=JSON.parse(localStorage.getItem("sz_calc_prices")||"{}");
-let calcQty=JSON.parse(localStorage.getItem("sz_calc_qty")||"{}");
+let calcMode=localStorage.getItem("sz_calc_mode")||"buy";
+let calcBuyPrices=JSON.parse(localStorage.getItem("sz_calc_buy_prices")||"{}");
+let calcBuyQty=JSON.parse(localStorage.getItem("sz_calc_buy_qty")||"{}");
+let calcSellPrices=JSON.parse(localStorage.getItem("sz_calc_sell_prices")||"{}");
+let calcSellQty=JSON.parse(localStorage.getItem("sz_calc_sell_qty")||"{}");
 let favIds=JSON.parse(localStorage.getItem("sz_favs")||"[]");
 let excludeIds=JSON.parse(localStorage.getItem("sz_excl")||"[]");
 let selectedCats=JSON.parse(localStorage.getItem("sz_cats")||"[]");
@@ -873,126 +873,140 @@ function renderCatalog(){
     card.onclick=()=>openCategory(card.dataset.cat);
   });
 }
-function saveCalc(){localStorage.setItem("sz_calc",JSON.stringify(calcIds));localStorage.setItem("sz_calc_prices",JSON.stringify(calcPrices));localStorage.setItem("sz_calc_qty",JSON.stringify(calcQty));localStorage.setItem("sz_calc_mode",calcMode)}
-let calcMode=localStorage.getItem("sz_calc_mode")||"buy";
+function saveCalc(){
+  localStorage.setItem("sz_calc",JSON.stringify(calcIds));
+  localStorage.setItem("sz_calc_mode",calcMode);
+  localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));
+  localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
+  localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));
+  localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+}
 function calcNum(v){
   if(v==null)return NaN;
   const s=String(v).replace(/\s+/g,"").replace(/,/g,".");
   return s===""?NaN:Number(s);
 }
+function calcState(){
+  return calcMode==="buy"
+    ? {prices:calcBuyPrices,qty:calcBuyQty}
+    : {prices:calcSellPrices,qty:calcSellQty};
+}
 function recalcCalc(){
-  let sumMy=0,sumAuc=0,hasMy=false,hasAuc=false;
+  const state=calcState();
+  let totalBuy=0,totalPlayer=0,totalAuctionNet=0;
+  let hasBuy=false,hasPlayer=false,hasAuction=false;
+
   for(const id of calcIds){
-    const r=rows.find(x=>x.id===id);
-    const rawPrice=calcNum(calcPrices[id]);
-    const qty=calcNum(calcQty[id]);
+    const price=calcNum(state.prices[id]);
+    const qty=calcNum(state.qty[id]);
     const validQty=Number.isFinite(qty)&&qty>0;
-    let unit=NaN,total=NaN;
+    const validPrice=Number.isFinite(price);
+
     if(calcMode==="buy"){
-      if(validQty&&Number.isFinite(rawPrice)){ total=rawPrice; unit=rawPrice/qty; }
+      if(validQty&&validPrice){
+        totalBuy+=price;
+        hasBuy=true;
+      }
+      const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
+      if(tr){
+        const unit=validQty&&validPrice?price/qty:NaN;
+        const unitEl=tr.querySelector(".calc-unit");
+        if(unitEl)unitEl.textContent=Number.isFinite(unit)?fmt(unit):"—";
+      }
     }else{
-      if(validQty&&Number.isFinite(rawPrice)){ unit=rawPrice; total=rawPrice*qty; }
-    }
-    if(Number.isFinite(total)){sumMy+=total;hasMy=true}
-    if(r&&r.min_price!=null&&Number.isFinite(Number(r.min_price))&&validQty){sumAuc+=Number(r.min_price)*qty;hasAuc=true}
-    const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
-    if(tr){
-      const auc=r&&r.min_price!=null?Number(r.min_price):NaN;
-      const diff=Number.isFinite(unit)&&Number.isFinite(auc)&&validQty?(unit-auc)*qty:null;
-      const unitEl=tr.querySelector(".calc-unit"), totalEl=tr.querySelector(".calc-total"), diffEl=tr.querySelector(".calc-diff");
-      if(unitEl)unitEl.textContent=Number.isFinite(unit)?fmt(unit):"—";
-      if(totalEl)totalEl.textContent=Number.isFinite(total)?fmt(total):"—";
-      if(diffEl){diffEl.style.color=diff==null?"var(--muted)":diff<0?"var(--green)":"var(--red)";diffEl.textContent=diff==null?"—":(diff>0?"+":"")+fmt(diff)}
-    }
-  }
-  const diff=hasMy&&hasAuc?sumMy-sumAuc:null;
-  const sellNet=hasMy&&hasAuc?Math.round(sumMy*0.95-sumAuc):null;
-  const tradeRows=$("tradeRows");
-    if(tradeRows){
-      tradeRows.innerHTML="";
-      for(const id of calcIds){
-        const r=rows.find(x=>x.id===id);
-        const rawPrice=calcNum(calcPrices[id]);
-        const qty=calcNum(calcQty[id]);
-        const validQty=Number.isFinite(qty)&&qty>0;
-        let sellTotal=NaN;
-
-        if(calcMode==="buy"){
-          if(validQty&&Number.isFinite(rawPrice)) sellTotal=rawPrice;
-        }else{
-          if(validQty&&Number.isFinite(rawPrice)) sellTotal=rawPrice*qty;
+      if(validQty&&validPrice){
+        const player=price*qty;
+        const auctionNet=player*0.95;
+        totalPlayer+=player;
+        totalAuctionNet+=auctionNet;
+        hasPlayer=true;hasAuction=true;
+        const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
+        if(tr){
+          const playerEl=tr.querySelector(".calc-player");
+          const auctionEl=tr.querySelector(".calc-auction");
+          if(playerEl)playerEl.textContent=fmt(player);
+          if(auctionEl)auctionEl.textContent=fmt(auctionNet);
         }
-
-        const buyTotal=(r&&r.min_price!=null&&validQty&&Number.isFinite(Number(r.min_price)))
-          ? Number(r.min_price)*qty : NaN;
-        const profit=Number.isFinite(sellTotal)&&Number.isFinite(buyTotal)
-          ? sellTotal-buyTotal : NaN;
-        const pct=Number.isFinite(profit)&&buyTotal>0
-          ? profit/buyTotal*100 : NaN;
-        const name=r?(r.name||r.title||r.item_name||id):id;
-
-        const box=document.createElement("div");
-        box.className="trade-item";
-        box.innerHTML=`<div class="trade-name" title="${esc(name)}">${esc(name)}</div>
-          <div class="trade-metrics">
-            <span class="trade-metric"><small>Покупка</small><b>${Number.isFinite(buyTotal)?fmt(buyTotal):"—"}</b></span>
-            <span class="trade-metric"><small>Продажа</small><b>${Number.isFinite(sellTotal)?fmt(sellTotal):"—"}</b></span>
-            <span class="trade-metric"><small>Прибыль</small><b class="${Number.isFinite(profit)?(profit>=0?"g":"r"):""}">${Number.isFinite(profit)?(profit>0?"+":"")+fmt(profit):"—"}</b></span>
-            <span class="trade-metric"><small>Доходность</small><b class="${Number.isFinite(pct)?(pct>=0?"g":"r"):""}">${Number.isFinite(pct)?(pct>0?"+":"")+pct.toFixed(1)+"%":"—"}</b></span>
-          </div>`;
-        tradeRows.appendChild(box);
+      }else{
+        const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
+        if(tr){
+          const playerEl=tr.querySelector(".calc-player");
+          const auctionEl=tr.querySelector(".calc-auction");
+          if(playerEl)playerEl.textContent="—";
+          if(auctionEl)auctionEl.textContent="—";
+        }
       }
     }
+  }
+
+  $("sumBuy").textContent=hasBuy?fmt(totalBuy):"—";
+  $("sumPlayer").textContent=hasPlayer?fmt(totalPlayer):"—";
+  $("sumAuctionNet").textContent=hasAuction?fmt(totalAuctionNet):"—";
 }
 function updateCalcMode(){
   const buy=calcMode==="buy";
-  $("calcBuyMode").classList.toggle("active",buy);$("calcSellMode").classList.toggle("active",!buy);
-  $("calcModeHint").textContent=buy?"Ввод: количество → цена всего → цена за 1 шт.":"Ввод: цена за 1 шт. → количество → сумма";
+  $("calcBuyMode").classList.toggle("active",buy);
+  $("calcSellMode").classList.toggle("active",!buy);
+  $("calcModeHint").textContent=buy
+    ?"Отдельный расчёт покупки"
+    :"Отдельный расчёт продажи: игроку и на аукционе −5% комиссии";
   $("calcHead").innerHTML=buy
-    ? '<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Моя цена / шт.</th><th>Аукцион / шт.</th><th>Разница</th><th></th>'
-    : '<th>Предмет</th><th>Моя цена / шт.</th><th>Количество</th><th>Моя сумма</th><th>Аукцион / шт.</th><th>Разница</th><th></th>';
+    ? '<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>'
+    : '<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Игроку</th><th>Аукцион −5%</th><th></th>';
+  $("calcBuySummary").style.display=buy?"block":"none";
+  $("calcSellSummary").style.display=buy?"none":"block";
 }
 function renderCalc(){
   const focused=document.activeElement;
   const restore=focused&&focused.matches?.('#calcBody input[data-qty-id],#calcBody input[data-price-id]')
-    ? {kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,start:focused.selectionStart,end:focused.selectionEnd,scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;
+    ? {kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,
+       start:focused.selectionStart,end:focused.selectionEnd,
+       scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;
+
   updateCalcMode();
+  const state=calcState();
   if(!calcIds.length){
-    $("calcBody").innerHTML=`<tr><td colspan="7" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
+    $("calcBody").innerHTML=`<tr><td colspan="${calcMode==="buy"?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
     recalcCalc();
     return;
   }
+
   $("calcBody").innerHTML=calcIds.map(id=>{
     const r=rows.find(x=>x.id===id)||{id,name:id};
-    const my=calcPrices[id]??"";
-    const qty=calcQty[id]??"";
-    const auc=r.min_price;
-    const buy=calcMode==="buy";
-    return buy
+    const price=state.prices[id]??"";
+    const qty=state.qty[id]??"";
+    return calcMode==="buy"
       ? `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
         <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td>
-        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(my))}" placeholder="Цена всего"></td>
-        <td class="calc-unit">—</td><td>${fmt(auc)}</td><td class="calc-diff">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td>
+        <td class="calc-unit">—</td>
+        <td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`
       : `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
-        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(my))}" placeholder="Цена / шт."></td>
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td>
         <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td>
-        <td class="calc-total">—</td><td>${fmt(auc)}</td><td class="calc-diff">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
+        <td class="calc-player">—</td>
+        <td class="calc-auction">—</td>
+        <td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
   }).join("");
+
   $("calcBody").querySelectorAll("input[data-price-id]").forEach(inp=>{
     inp.oninput=()=>{
       const id=inp.dataset.priceId;
+      const state=calcState();
       const raw=inp.value.replace(/[^0-9.,]/g,"");
       if(raw!==inp.value)inp.value=raw;
-      if(raw.trim()==="")delete calcPrices[id]; else calcPrices[id]=raw;
+      if(raw.trim()==="")delete state.prices[id]; else state.prices[id]=raw;
       saveCalc();recalcCalc();
     };
   });
+
   $("calcBody").querySelectorAll("input[data-qty-id]").forEach(inp=>{
     inp.oninput=()=>{
       const id=inp.dataset.qtyId;
+      const state=calcState();
       const raw=inp.value.replace(/[^0-9]/g,"");
       if(raw!==inp.value)inp.value=raw;
-      if(raw.trim()==="")delete calcQty[id]; else calcQty[id]=raw;
+      if(raw.trim()==="")delete state.qty[id]; else state.qty[id]=raw;
       saveCalc();recalcCalc();
     };
     inp.onkeydown=e=>{
@@ -1004,13 +1018,27 @@ function renderCalc(){
       }
     };
   });
-  $("calcBody").querySelectorAll(".rm").forEach(btn=>{btn.onclick=()=>{calcIds=calcIds.filter(x=>x!==btn.dataset.id);delete calcPrices[btn.dataset.id];delete calcQty[btn.dataset.id];saveCalc();renderCalc()}});
+
+  $("calcBody").querySelectorAll(".rm").forEach(btn=>{
+    btn.onclick=()=>{
+      calcIds=calcIds.filter(x=>x!==btn.dataset.id);
+      delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];
+      delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];
+      saveCalc();renderCalc();
+    };
+  });
+
   recalcCalc();
   if(restore){
     requestAnimationFrame(()=>{
       const attr=restore.kind==='qty'?'data-qty-id':'data-price-id';
       const el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);
-      if(el){el.focus({preventScroll:true});try{el.setSelectionRange(restore.start,restore.end)}catch{};const sc=document.querySelector('#calcPane .scroll');if(sc)sc.scrollTop=restore.scroll}
+      if(el){
+        el.focus({preventScroll:true});
+        try{el.setSelectionRange(restore.start,restore.end)}catch{}
+        const sc=document.querySelector('#calcPane .scroll');
+        if(sc)sc.scrollTop=restore.scroll;
+      }
     });
   }
 }
