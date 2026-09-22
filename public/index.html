@@ -475,7 +475,9 @@ async function refreshFavoriteLots(force=false){
       r.totalAmount=x.totalAmount??null;
       r.ts=x.ts||r.ts;
     }
+    const favScrollState=saveScrollState();
     renderFavs();
+    requestAnimationFrame(()=>restoreScrollState(favScrollState));
   }catch{}
   finally{favLiveBusy=false}
 }
@@ -949,6 +951,22 @@ function updateCalcSuggest(){
   });
 }
 const itemCache={};
+function saveScrollState(){
+  const out=[];
+  document.querySelectorAll(".scroll,.table-scroll,.drawer-body").forEach((el,i)=>{
+    out.push([i,el.scrollTop,el.scrollLeft]);
+  });
+  return out;
+}
+function restoreScrollState(state){
+  if(!state)return;
+  const els=document.querySelectorAll(".scroll,.table-scroll,.drawer-body");
+  state.forEach(([i,top,left])=>{
+    const el=els[i];
+    if(el){el.scrollTop=top;el.scrollLeft=left;}
+  });
+}
+
 async function openItem(id,silent){
   activeId=id;window._drawerHistoryAt=0;renderCards();renderFavs();
   $("drawer").classList.add("open");$("overlay").classList.add("show");
@@ -983,7 +1001,10 @@ async function openItem(id,silent){
   favBtn.textContent=isFav(id)?"★":"☆";
   favBtn.onclick=()=>toggleFav(id);
   try{
-    const j=await(await fetch("/api/item/"+encodeURIComponent(id))).json();
+    const drawerScrollState=saveScrollState();
+    const j=await(await fetch("/api/item/"+encodeURIComponent(id),{cache:"no-store"})).json();
+    if(!Array.isArray(j.history) && itemCache[id]?.history) j.history=itemCache[id].history;
+    if(!Array.isArray(j.lots) && itemCache[id]?.lots) j.lots=itemCache[id].lots;
     itemCache[id]=j;
     if(activeId!==id)return; // stale response
     $("dBody").dataset.itemId=id;
@@ -1171,13 +1192,16 @@ async function openItem(id,silent){
             rr.totalAmount=live.totalAmount??null;
             rr.ts=live.ts||rr.ts;
           }
+          const liveScrollState=saveScrollState();
           renderCards();renderFavs();
+          requestAnimationFrame(()=>restoreScrollState(liveScrollState));
           if(!window._drawerHistoryAt || Date.now()-window._drawerHistoryAt>=6000){
             window._drawerHistoryAt=Date.now();
             openItem(id,true);
           }
         }catch{}
       },1500);
+    requestAnimationFrame(()=>restoreScrollState(drawerScrollState));
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
