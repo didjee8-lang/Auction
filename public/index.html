@@ -337,6 +337,13 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <div class="row"><span>Разница</span><b id="sumDiff">—</b></div>
           <div class="row"><span>После комиссии 5% (если купить по аукциону и продать по моей)</span><b id="sumNet">—</b></div>
         </div>
+        <div class="calc-sum calc-trade-sum">
+          <div class="section" style="margin-top:0">Трейд с игроком — без комиссии</div>
+          <div class="row"><span>Потратить на покупку по аукциону</span><b id="tradeBuy">—</b></div>
+          <div class="row"><span>Получить при продаже игроку</span><b id="tradeSell">—</b></div>
+          <div class="row"><span>Прибыль без комиссии</span><b id="tradeProfit">—</b></div>
+          <div class="row"><span>Доходность</span><b id="tradePct">—</b></div>
+        </div>
       </div>
     </div>
   </div>
@@ -891,9 +898,15 @@ function recalcCalc(){
   }
   const diff=hasMy&&hasAuc?sumMy-sumAuc:null;
   const sellNet=hasMy&&hasAuc?Math.round(sumMy*0.95-sumAuc):null;
+  const tradeProfit=hasMy&&hasAuc?sumMy-sumAuc:null;
+  const tradePct=hasMy&&hasAuc&&sumAuc>0?((tradeProfit/sumAuc)*100):null;
   $("sumMy").textContent=hasMy?fmt(sumMy):"—";$("sumAuc").textContent=hasAuc?fmt(sumAuc):"—";
   $("sumDiff").innerHTML=diff==null?"—":`<span class="${diff<0?"g":"r"}">${diff>0?"+":""}${fmt(diff)}</span>`;
   $("sumNet").innerHTML=sellNet==null?"—":`<span class="${sellNet>=0?"g":"r"}">${sellNet>0?"+":""}${fmt(sellNet)}</span>`;
+  $("tradeBuy").textContent=hasAuc?fmt(sumAuc):"—";
+  $("tradeSell").textContent=hasMy?fmt(sumMy):"—";
+  $("tradeProfit").innerHTML=tradeProfit==null?"—":`<span class="${tradeProfit>=0?"g":"r"}">${tradeProfit>0?"+":""}${fmt(tradeProfit)}</span>`;
+  $("tradePct").innerHTML=tradePct==null?"—":`<span class="${tradePct>=0?"g":"r"}">${tradePct>0?"+":""}${tradePct.toFixed(1)}%</span>`;
 }
 function updateCalcMode(){
   const buy=calcMode==="buy";
