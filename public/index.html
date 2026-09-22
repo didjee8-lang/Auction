@@ -1145,8 +1145,25 @@ async function openItem(id,silent){
       if(scNet)scNet.textContent=fmt(net);
       if(scReverse)scReverse.innerHTML=`Выставление: <b>${fmt(gross)}</b> · после 5%: <b style="color:var(--green)">${fmt(net)}</b> · чтобы получить ${fmt(price)} / шт. чистыми → выставить <b style="color:var(--neon2)">${fmt(need)} / шт.</b>`;
     };
-    if(scPrice){scPrice.value=sellMarket!=null?String(Math.round(sellMarket)):"";scPrice.oninput=()=>{scPrice.value=scPrice.value.replace(/[^0-9.,]/g,"");updateSellCalc()}}
-    if(scQty)scQty.oninput=()=>{scQty.value=scQty.value.replace(/[^0-9]/g,"");updateSellCalc()};
+    const sellCalcStorageKey="sz_sell_calc_"+String(id);
+    let savedSellCalc=null;
+    try{savedSellCalc=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"null")}catch{}
+    if(scPrice){
+      scPrice.value=savedSellCalc&&Object.prototype.hasOwnProperty.call(savedSellCalc,"price")?String(savedSellCalc.price):(sellMarket!=null?String(Math.round(sellMarket)):"");
+      scPrice.oninput=()=>{
+        scPrice.value=scPrice.value.replace(/[^0-9.,]/g,"");
+        try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.price=scPrice.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}
+        updateSellCalc()
+      }
+    }
+    if(scQty){
+      if(savedSellCalc&&Object.prototype.hasOwnProperty.call(savedSellCalc,"qty"))scQty.value=String(savedSellCalc.qty);
+      scQty.oninput=()=>{
+        scQty.value=scQty.value.replace(/[^0-9]/g,"");
+        try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.qty=scQty.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}
+        updateSellCalc()
+      };
+    }
     updateSellCalc();
     const addBtn=$("addToCalc");
     if(addBtn)addBtn.onclick=()=>{if(!calcIds.includes(id))calcIds.push(id);saveCalc();rightTab="calc";
