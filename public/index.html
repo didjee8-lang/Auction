@@ -459,8 +459,10 @@ function renderFavs(){
     const listed=(r.lots||0)>0;
     const cls=["fav-card",id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":"",!listed?"expensive":""].filter(Boolean).join(" ");
     const unit=listed?(r.minUnitPrice!=null?r.minUnitPrice:r.min_price):null;
-    const price=listed?fmt(unit):"нет лотов";
-    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:"не выставлен";
+    // If there is no active lot, keep showing the latest recorded sale instead of an empty card.
+    const lastSale=!listed && Number.isFinite(Number(r.lastSale)) && Number(r.lastSale)>0 ? Number(r.lastSale) : null;
+    const price=listed?fmt(unit):(lastSale!=null?fmt(lastSale):"нет данных");
+    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:(lastSale!=null?"последняя продажа":"не выставлен");
     return`<div class="${cls}" data-id="${esc(id)}">
       <button class="fav-star" data-fav-rm="${esc(id)}" title="Убрать из избранного">★</button>
       <div class="fav-top">
@@ -487,9 +489,9 @@ function renderFavs(){
         tipEl.className="fav-tip show";
         tipEl.innerHTML=`<div class="ft-title">${esc(r.name||id)}</div>
           <div class="ft-row"><span>Статус</span><b class="${listed?"ft-deal":""}">${listed?"в продаже":"не выставлен"}</b></div>
-          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):"—"}</b></div>
+          <div class="ft-row"><span>${listed?"Цена / шт.":"Последняя продажа"}</span><b>${listed?fmt(unit):(lastSale!=null?fmt(lastSale):"—")}</b></div>
           <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):"0"}</b></div>
-          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
+          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${listed&&r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
           ${deal?`<div class="ft-row ft-deal">Выгоднее рынка</div>`:""}`;
         document.body.appendChild(tipEl);
         const rect=el.getBoundingClientRect();

@@ -7,38 +7,6 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
-
-// Railway runs behind a reverse proxy. Trust the first proxy so Express
-// resolves req.ip from X-Forwarded-For correctly.
-app.set("trust proxy", 1);
-
-const IP_WHITELIST = new Set(
-  (process.env.IP_WHITELIST || "")
-    .split(",")
-    .map(ip => ip.trim())
-    .filter(Boolean)
-);
-
-function ipWhitelist(req, res, next) {
-  const ip = req.ip;
-
-  if (IP_WHITELIST.has(ip)) {
-    return next();
-  }
-
-  console.log(`Blocked IP: ${ip}`);
-  return res.status(403).send(`
-    <!doctype html>
-    <html>
-      <head><meta charset="utf-8"><title>403</title></head>
-      <body style="font-family:sans-serif;text-align:center;padding:80px">
-        <h1>403</h1>
-        <p>Access denied</p>
-      </body>
-    </html>
-  `);
-}
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4173);
 const REGION = (process.env.STALZONE_REGION || "RU").toUpperCase();
@@ -49,7 +17,32 @@ const POLL_MS = Number(process.env.POLL_INTERVAL_MS || 45000);
 const CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 5);
 const BATCH_DELAY_MS = Number(process.env.BATCH_DELAY_MS || 200);
 const MAX_ITEMS_PER_CYCLE = Number(process.env.MAX_ITEMS_PER_CYCLE || 400);
-const DB = new Database(process.env.DB_FILE || path.join(__dirname, "market.db"));
+
+// Keep SQLite data outside the deploy filesystem when Railway Volume is attached.
+// Without a volume Railway's deployment filesystem is ephemeral, so a redeploy can
+// replace market.db. With a volume, the same auction/sales database survives deploys.
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, "data");
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, "market.db");
+
+// One-time migration when a legacy market.db is still present in the old app folder.
+if (!process.env.DB_FILE && process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+  const legacyDb = path.join(__dirname, "market.db");
+  if (!fs.existsSync(DB_FILE) && fs.existsSync(legacyDb)) {
+    try {
+      fs.copyFileSync(legacyDb, DB_FILE);
+      for (const suffix of ["-wal", "-shm"]) {
+        const src = legacyDb + suffix;
+        if (fs.existsSync(src)) fs.copyFileSync(src, DB_FILE + suffix);
+      }
+      console.log(`Migrated legacy SQLite database to ${DB_FILE}`);
+    } catch (e) {
+      console.warn(`Could not migrate legacy SQLite database: ${e.message}`);
+    }
+  }
+}
+
+const DB = new Database(DB_FILE);
 
 DB.pragma("journal_mode = WAL");
 DB.exec(`
@@ -183,9 +176,8 @@ async function scanOne(item){
   DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
     .run(item.id,now,min,avg,max,lots.length);
 
-  // Refresh sale history even when there are no active lots. A sold-out item
-  // still has a fresh completed sale in the history endpoint.
-  {
+  // also refresh a bit of sale history for hot items
+  if(lots.length>0){
     try{
       const hj=await api(`/auction/${encodeURIComponent(item.id)}/history?limit=50&additional=true`);
       const sales=parseHistory(hj).map(s=>({...s, ts:s.ts||now, raw:s.raw||JSON.stringify(s)}));
@@ -309,7 +301,6 @@ function salesAverages(itemId){
   };
 }
 
-app.use(ipWhitelist);
 app.use(express.json());
 app.use(express.static(path.join(__dirname,"public")));
 
@@ -345,7 +336,6 @@ app.get("/api/market",(_,res)=>{
     const o=getLast.get(x.id);
     const lotRows=getLots.all(x.id);
     const lotsCount=lotRows.length;
-    const totalAmount=lotRows.reduce((sum,l)=>sum+(Number(l.amount)||0),0);
     const lotPrices=lotRows.map(l=>l.price).filter(p=>p>0);
     const minLot=lotRows[0]||null;
     const minP=minLot?.price??(o?.min_price??null);
@@ -397,10 +387,6 @@ app.get("/api/market",(_,res)=>{
       avg_price:lotAvg,
       max_price:lotPrices.length?lotPrices[lotPrices.length-1]:(o?.max_price??null),
       lots:lotsCount,
-      totalAmount:totalAmount>0?totalAmount:null,
-      minAmount:minLot?.amount??null,
-      minTotalPrice:minLot?.price!=null && minLot?.amount!=null ? Math.round(minLot.price*minLot.amount) : null,
-      minUnitPrice:minLot?.price??minP,
       minQlt, minPtn,
       qltLabel:qltLabel(minQlt),
       histMedian:ref,
@@ -428,36 +414,19 @@ app.get("/api/market",(_,res)=>{
 app.get("/api/item/:id",async(req,res)=>{
   const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
   if(!item)return res.status(404).json({error:"item not found"});
-  // Opening an item performs a live refresh of active lots, so a purchased
-  // lot disappears immediately instead of waiting for the background scanner.
-  let lots=[];
-  try{
-    const lj=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-    lots=parseLots(lj);
-    const now=new Date().toISOString();
-    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
-    const lins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
-    const ltx=DB.transaction(a=>{for(const l of a)lins.run(item.id,l.id,l.price,l.amount,l.created,l.raw||JSON.stringify(l),now,l.qlt,l.ptn)});
-    ltx(lots);
-    const prices=lots.map(l=>l.price).filter(p=>p>0).sort((a,b)=>a-b);
-    DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
-      .run(item.id,now,prices[0]||null,prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null,prices.length?prices[prices.length-1]:null,lots.length);
-  }catch{
-    lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(item.id);
-  }
-
   const observations=DB.prepare("SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 2000").all(item.id).reverse();
+  const lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(item.id);
   let history=[];
   try{
     const j=await api(`/auction/${encodeURIComponent(item.id)}/history?limit=200&additional=true`);
-    history=parseHistory(j).sort((a,b)=>new Date(b.ts||0)-new Date(a.ts||0));
+    history=parseHistory(j);
     const ins=DB.prepare(`INSERT OR REPLACE INTO sale_observations(item_id,sale_id,ts,price,amount,raw,qlt,ptn) VALUES(?,?,?,?,?,?,?,?)`);
     for(const s of history)ins.run(item.id,s.id,s.ts,s.price,s.amount,s.raw||JSON.stringify(s),s.qlt,s.ptn);
   }catch{}
 
   const sa=salesAverages(item.id);
   const salePrices=history.map(h=>h.price).filter(p=>p>0);
-  const lastSale=history.find(h=>h.price>0)?.price??null;
+  const lastSale=salePrices[0]??null;
   const curMin=lots.length?Math.min(...lots.map(l=>l.price)):null;
   const changeVsLastSale=(curMin&&lastSale)?Math.round(((curMin-lastSale)/lastSale)*1000)/10:null;
 
