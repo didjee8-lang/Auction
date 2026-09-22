@@ -894,7 +894,7 @@ function saveCalc(){
   try{
     localStorage.setItem("sz_calc",JSON.stringify(calcIds));localStorage.setItem("sz_calc_mode",calcMode);
     localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
-    localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+    localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));localStorage.setItem("sz_calc_total_sell_prices",JSON.stringify(calcTotalSellPrices));localStorage.setItem("sz_calc_total_sell_qty",JSON.stringify(calcTotalSellQty));
   }catch{}
 }
 function persistVisibleCalcInputs(){
@@ -910,7 +910,7 @@ function persistVisibleCalcInputs(){
   saveCalc();
 }
 function calcNum(v){if(v==null)return NaN;const s=String(v).replace(/\s+/g,"").replace(/,/g,".");return s===""?NaN:Number(s)}
-function calcState(){return calcMode==="buy"?{prices:calcBuyPrices,qty:calcBuyQty}:{prices:calcSellPrices,qty:calcSellQty}}
+function calcState(){if(calcMode==="buy")return{prices:calcBuyPrices,qty:calcBuyQty};if(calcMode==="sell")return{prices:calcSellPrices,qty:calcSellQty};return{prices:calcTotalSellPrices,qty:calcTotalSellQty}}
 function recalcCalc(){
   const state=calcState();let totalBuy=0,totalPlayer=0,totalAuction=0,hasBuy=false,hasSale=false;const details=[];
   for(const id of calcIds){const r=rows.find(x=>x.id===id)||{id,name:id},price=calcNum(state.prices[id]),qty=calcNum(state.qty[id]);const vq=Number.isFinite(qty)&&qty>0,vp=Number.isFinite(price)&&price>=0;let unit=NaN,player=NaN,auction=NaN,commission=NaN;
@@ -933,7 +933,7 @@ function renderCalc(){
   $("calcBody").innerHTML=calcIds.map(id=>{const r=rows.find(x=>x.id===id)||{id,name:id},price=state.prices[id]??'',qty=state.qty[id]??'';if(calcMode==='buy')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td><td class="calc-unit">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`}).join('');
   $("calcBody").querySelectorAll('input[data-price-id]').forEach(inp=>inp.oninput=()=>{const id=inp.dataset.priceId,state=calcState(),raw=inp.value.replace(/[^0-9.,]/g,'');if(raw!==inp.value)inp.value=raw;if(!raw.trim())delete state.prices[id];else state.prices[id]=raw;saveCalc();recalcCalc()});
   $("calcBody").querySelectorAll('input[data-qty-id]').forEach(inp=>{inp.oninput=()=>{const id=inp.dataset.qtyId,state=calcState(),raw=inp.value.replace(/[^0-9]/g,'');if(raw!==inp.value)inp.value=raw;if(!raw.trim())delete state.qty[id];else state.qty[id]=raw;saveCalc();recalcCalc()};inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const x=inp.closest('tr')?.querySelector('input[data-price-id]');if(x){x.focus();x.select()}}}});
-  $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{calcIds=calcIds.filter(x=>x!==btn.dataset.id);delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];saveCalc();renderCalc()});recalcCalc();
+  $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{calcIds=calcIds.filter(x=>x!==btn.dataset.id);delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];delete calcTotalSellPrices[btn.dataset.id];delete calcTotalSellQty[btn.dataset.id];saveCalc();renderCalc()});recalcCalc();
   if(restore)requestAnimationFrame(()=>{const attr=restore.kind==='qty'?'data-qty-id':'data-price-id',el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);if(el){el.focus({preventScroll:true});try{el.setSelectionRange(restore.start,restore.end)}catch{}const sc=document.querySelector('#calcPane .scroll');if(sc)sc.scrollTop=restore.scroll}})
 }
 window.addEventListener("pagehide",persistVisibleCalcInputs);
