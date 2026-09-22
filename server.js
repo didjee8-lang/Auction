@@ -144,6 +144,57 @@ function parseLots(j){
     };
   }).filter(x=>x.price>0);
 }
+async function fetchAllLots(itemId){
+  const pageSize=200;
+  const maxPages=1000;
+  const all=[];
+  const seen=new Set();
+  let offset=0;
+  let total=null;
+
+  for(let page=0; page<maxPages; page++){
+    const j=await api(`/auction/${encodeURIComponent(itemId)}/lots?offset=${offset}&limit=${pageSize}&sort=buyout_price&order=asc&additional=true`);
+    const rawArr=Array.isArray(j)?j:(j?.lots||j?.data?.lots||j?.data||[]);
+    if(!Array.isArray(rawArr)||!rawArr.length) break;
+
+    if(total==null){
+      const t=Number(j?.total ?? j?.data?.total ?? j?.totalCount ?? j?.count);
+      if(Number.isFinite(t)&&t>=0) total=t;
+    }
+
+    const parsed=parseLots({lots:rawArr});
+    let added=0;
+    for(const lot of parsed){
+      if(!seen.has(lot.id)){
+        seen.add(lot.id);
+        all.push(lot);
+        added++;
+      }
+    }
+
+    if(total!=null && seen.size>=total) break;
+    if(rawArr.length<pageSize) break;
+    if(added===0) break; // API ignored offset or returned the same page
+
+    offset+=rawArr.length;
+    if(page<maxPages-1) await sleep(30);
+  }
+
+  // Some RU responses have historically contained already-expired lots.
+  // Keep only lots whose endTime has not passed when that field is available.
+  const now=Date.now();
+  return all.filter(l=>{
+    try{
+      const raw=JSON.parse(l.raw||'{}');
+      if(raw.endTime){
+        const t=new Date(raw.endTime).getTime();
+        if(Number.isFinite(t) && t<=now) return false;
+      }
+    }catch{}
+    return true;
+  });
+}
+
 function parseHistory(j){
   const arr=Array.isArray(j)?j:(j.prices||j.history||j.sales||j.data||[]);
   return arr.map((x,i)=>{
@@ -169,8 +220,7 @@ function qltLabel(q){return q!=null && QLT_LABELS[q]!=null?QLT_LABELS[q]:null;}
 
 
 async function scanOne(item){
-  const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-  const lots=parseLots(j);
+  const lots=await fetchAllLots(item.id);
   const now=new Date().toISOString();
   // clear old lots for item then insert fresh
   DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
@@ -450,8 +500,7 @@ app.get("/api/item/:id",async(req,res)=>{
   // lot disappears immediately instead of waiting for the background scanner.
   let lots=[];
   try{
-    const lj=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-    lots=parseLots(lj);
+    lots=await fetchAllLots(item.id);
     const now=new Date().toISOString();
     DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
     const lins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
@@ -507,6 +556,61 @@ app.get("/api/item/:id",async(req,res)=>{
   });
 });
 
+
+app.get("/api/item/:id/live",async(req,res)=>{
+  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
+  if(!item)return res.status(404).json({ok:false,error:"item not found"});
+  try{
+    const lots=await fetchAllLots(item.id);
+    const now=new Date().toISOString();
+    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+    const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
+    const tx=DB.transaction(a=>{for(const x of a)ins.run(item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn)});
+    tx(lots);
+    const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
+    const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
+    const minPrice=prices[0]??null;
+    const maxPrice=prices.length?prices[prices.length-1]:null;
+    const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
+    const minLot=lots.length?lots[0]:null;
+    const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
+    DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`).run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
+    res.json({ok:true,id:item.id,lotsCount:lots.length,minPrice,minUnitPrice:minPrice,minAmount:minLot?.amount??null,minTotalPrice:minLot?.price!=null&&minLot?.amount!=null?Math.round(minLot.price*minLot.amount):null,maxPrice,avgPrice,totalAmount,ts:now});
+  }catch(e){res.status(502).json({ok:false,error:e.message});}
+});
+
+app.get("/api/favorites/live",async(req,res)=>{
+  const ids=String(req.query.ids||"").split(",").map(x=>x.trim()).filter(Boolean).slice(0,50);
+  if(!ids.length)return res.json({ok:true,rows:[]});
+  const items=DB.prepare(`SELECT * FROM items WHERE id IN (${ids.map(()=>"?").join(",")})`).all(...ids);
+  const queue=[...items],out=[];
+  const worker=async()=>{
+    while(queue.length){
+      const item=queue.shift();
+      try{
+        const lots=await fetchAllLots(item.id);
+        const now=new Date().toISOString();
+        DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+        const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
+        const tx=DB.transaction(a=>{for(const x of a)ins.run(item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn)});
+        tx(lots);
+        const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
+        const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
+        const minPrice=prices[0]??null;
+        const maxPrice=prices.length?prices[prices.length-1]:null;
+        const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
+        const minLot=lots.length?lots[0]:null;
+        const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
+        DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`).run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
+        out.push({id:item.id,ok:true,lotsCount:lots.length,minPrice,minUnitPrice:minPrice,minAmount:minLot?.amount??null,minTotalPrice:minLot?.price!=null&&minLot?.amount!=null?Math.round(minLot.price*minLot.amount):null,maxPrice,avgPrice,totalAmount,ts:now});
+      }catch(e){out.push({id:item.id,ok:false,error:e.message});}
+    }
+  };
+  await Promise.all(Array.from({length:Math.min(6,items.length)},()=>worker()));
+  // Preserve the requested favorite order.
+  const byId=new Map(out.map(x=>[x.id,x]));
+  res.json({ok:true,rows:ids.map(id=>byId.get(id)||{id,ok:false,error:"item not found"})});
+});
 
 const ICONS_DIR = path.join(__dirname, "public", "icons");
 fs.mkdirSync(ICONS_DIR, { recursive: true });

@@ -489,10 +489,14 @@ function renderFavs(){
     const r=rows.find(x=>x.id===id)||{id,name:id};
     const tier=tierBadge(r);
     const listed=(r.lots||0)>0;
-    const cls=["fav-card",id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":"",!listed?"expensive":""].filter(Boolean).join(" ");
+    const cls=["fav-card",id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
     const unit=listed?(r.minUnitPrice!=null?r.minUnitPrice:r.min_price):null;
-    const price=listed?fmt(unit):"нет лотов";
-    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:"не выставлен";
+    // If there are no active lots, show the latest completed sale instead of
+    // the misleading "не выставлен" price. Once a real active lot appears,
+    // the live auction price always takes priority.
+    const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
+    const price=listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"нет данных");
+    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:(fallbackSale!=null?"нет активных лотов · последняя продажа":"нет активных лотов");
     return`<div class="${cls}" data-id="${esc(id)}">
       <button class="fav-star" data-fav-rm="${esc(id)}" title="Убрать из избранного">★</button>
       <div class="fav-top">
@@ -513,14 +517,15 @@ function renderFavs(){
         if(!r)return;
         const listed=(r.lots||0)>0;
         const unit=listed?(r.minUnitPrice??r.min_price):null;
+        const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
         const deal=r.status==="cheap";
         document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
         tipEl=document.createElement("div");
         tipEl.className="fav-tip show";
         tipEl.innerHTML=`<div class="ft-title">${esc(r.name||id)}</div>
           <div class="ft-row"><span>Статус</span><b class="${listed?"ft-deal":""}">${listed?"в продаже":"не выставлен"}</b></div>
-          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):"—"}</b></div>
-          <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):"0"}</b></div>
+          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"—")}</b></div>
+          <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):(fallbackSale!=null?"0 · последняя продажа":"0")}</b></div>
           <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
           ${deal?`<div class="ft-row ft-deal">Выгоднее рынка</div>`:""}`;
         document.body.appendChild(tipEl);
