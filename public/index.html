@@ -342,7 +342,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 <div class="overlay" id="overlay"></div>
 <div class="drawer" id="drawer">
   <div class="drawer-head">
-    <img class="icon" id="dIcon" style="display:none" alt="">
+    <img class="icon" id="dIcon" style="display:none;pointer-events:none" alt="">
     <div class="icon-ph" id="dIconPh">?</div>
     <h2 id="dName">—</h2>
     <button class="close" id="closeBtn">×</button>
@@ -459,10 +459,8 @@ function renderFavs(){
     const listed=(r.lots||0)>0;
     const cls=["fav-card",id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":"",!listed?"expensive":""].filter(Boolean).join(" ");
     const unit=listed?(r.minUnitPrice!=null?r.minUnitPrice:r.min_price):null;
-    // If there is no active lot, keep showing the latest recorded sale instead of an empty card.
-    const lastSale=!listed && Number.isFinite(Number(r.lastSale)) && Number(r.lastSale)>0 ? Number(r.lastSale) : null;
-    const price=listed?fmt(unit):(lastSale!=null?fmt(lastSale):"нет данных");
-    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:(lastSale!=null?"последняя продажа":"не выставлен");
+    const price=listed?fmt(unit):"нет лотов";
+    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:"не выставлен";
     return`<div class="${cls}" data-id="${esc(id)}">
       <button class="fav-star" data-fav-rm="${esc(id)}" title="Убрать из избранного">★</button>
       <div class="fav-top">
@@ -489,9 +487,9 @@ function renderFavs(){
         tipEl.className="fav-tip show";
         tipEl.innerHTML=`<div class="ft-title">${esc(r.name||id)}</div>
           <div class="ft-row"><span>Статус</span><b class="${listed?"ft-deal":""}">${listed?"в продаже":"не выставлен"}</b></div>
-          <div class="ft-row"><span>${listed?"Цена / шт.":"Последняя продажа"}</span><b>${listed?fmt(unit):(lastSale!=null?fmt(lastSale):"—")}</b></div>
+          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):"—"}</b></div>
           <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):"0"}</b></div>
-          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${listed&&r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
+          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
           ${deal?`<div class="ft-row ft-deal">Выгоднее рынка</div>`:""}`;
         document.body.appendChild(tipEl);
         const rect=el.getBoundingClientRect();
@@ -715,7 +713,7 @@ function renderCards(){
       <div class="pcard-status">${statusBadge(r)}</div>
     </div>`;
   }).join("");
-  $("cards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav],[data-excl]"))return;openItem(el.dataset.id)});
+  $("cards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav],[data-excl]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
   $("cards").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
   $("cards").querySelectorAll("[data-excl]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();addExclude(btn.dataset.excl)});
 }
@@ -748,7 +746,7 @@ function openCategory(cat){
       ${r.lots>0?`<div class="pcard-qty"><b>${fmtN(r.lots)} лот.</b></div>`:""}
     </div>`;
   }).join("")||`<div class="empty" style="grid-column:1/-1">Пусто</div>`;
-  $("catItemsGrid").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;openItem(el.dataset.id)});
+  $("catItemsGrid").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
   $("catItemsGrid").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
 }
 function renderCatalog(){
@@ -775,7 +773,7 @@ function renderCatalog(){
           <div class="pcard-price">${(r.lots||0)>0?fmt(r.min_price):"—"}</div>
         </div>`;
       }).join("")}</div>`;
-      $("catCards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;openItem(el.dataset.id)});
+      $("catCards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
       $("catCards").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
       return;
     }
