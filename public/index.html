@@ -891,9 +891,23 @@ function renderCatalog(){
   });
 }
 function saveCalc(){
-  localStorage.setItem("sz_calc",JSON.stringify(calcIds));localStorage.setItem("sz_calc_mode",calcMode);
-  localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
-  localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+  try{
+    localStorage.setItem("sz_calc",JSON.stringify(calcIds));localStorage.setItem("sz_calc_mode",calcMode);
+    localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
+    localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+  }catch{}
+}
+function persistVisibleCalcInputs(){
+  const state=calcState();
+  document.querySelectorAll('#calcBody input[data-price-id]').forEach(inp=>{
+    const id=inp.dataset.priceId,raw=String(inp.value??'');
+    if(raw.trim())state.prices[id]=raw; else delete state.prices[id];
+  });
+  document.querySelectorAll('#calcBody input[data-qty-id]').forEach(inp=>{
+    const id=inp.dataset.qtyId,raw=String(inp.value??'');
+    if(raw.trim())state.qty[id]=raw; else delete state.qty[id];
+  });
+  saveCalc();
 }
 function calcNum(v){if(v==null)return NaN;const s=String(v).replace(/\s+/g,"").replace(/,/g,".");return s===""?NaN:Number(s)}
 function calcState(){return calcMode==="buy"?{prices:calcBuyPrices,qty:calcBuyQty}:{prices:calcSellPrices,qty:calcSellQty}}
@@ -912,6 +926,8 @@ function recalcCalc(){
 }
 function updateCalcMode(){const buy=calcMode==="buy",sell=calcMode==="sell",total=calcMode==="totalSell";$("calcBuyMode").classList.toggle('active',buy);$("calcSellMode").classList.toggle('active',sell);$("calcTotalSellMode").classList.toggle('active',total);$("calcModeHint").textContent=buy?'Покупка: общая цена ÷ количество':sell?'Продажа: цена за 1 шт. × количество':'Общ. продажа: общая цена ÷ количество, аукцион −5%';$("calcHead").innerHTML=buy?'<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>':sell?'<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>':'<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';$("calcBuySummary").style.display=buy?'block':'none';$("calcSellSummary").style.display=buy?'none':'block'}
 function renderCalc(){
+  // Save current DOM values before any redraw (including automatic auction refresh).
+  persistVisibleCalcInputs();
   const focused=document.activeElement;const restore=focused&&focused.matches?.('#calcBody input[data-qty-id],#calcBody input[data-price-id]')?{kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,start:focused.selectionStart,end:focused.selectionEnd,scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;updateCalcMode();const state=calcState();
   if(!calcIds.length){$("calcBody").innerHTML=`<tr><td colspan="${calcMode==='buy'?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;$("calcDetails").innerHTML='';recalcCalc();return}
   $("calcBody").innerHTML=calcIds.map(id=>{const r=rows.find(x=>x.id===id)||{id,name:id},price=state.prices[id]??'',qty=state.qty[id]??'';if(calcMode==='buy')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td><td class="calc-unit">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`}).join('');
@@ -920,6 +936,9 @@ function renderCalc(){
   $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{calcIds=calcIds.filter(x=>x!==btn.dataset.id);delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];saveCalc();renderCalc()});recalcCalc();
   if(restore)requestAnimationFrame(()=>{const attr=restore.kind==='qty'?'data-qty-id':'data-price-id',el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);if(el){el.focus({preventScroll:true});try{el.setSelectionRange(restore.start,restore.end)}catch{}const sc=document.querySelector('#calcPane .scroll');if(sc)sc.scrollTop=restore.scroll}})
 }
+window.addEventListener("pagehide",persistVisibleCalcInputs);
+window.addEventListener("beforeunload",persistVisibleCalcInputs);
+
 function updateCalcSuggest(){
   const q=($("calcQ").value||"").trim().toLowerCase();
   const box=$("calcSuggest");
@@ -1154,7 +1173,8 @@ async function openItem(id,silent){
         scPrice.value=scPrice.value.replace(/[^0-9.,]/g,"");
         try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.price=scPrice.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}
         updateSellCalc()
-      }
+      };
+      scPrice.onchange=scPrice.onblur=()=>{try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.price=scPrice.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}}
     }
     if(scQty){
       if(savedSellCalc&&Object.prototype.hasOwnProperty.call(savedSellCalc,"qty"))scQty.value=String(savedSellCalc.qty);
