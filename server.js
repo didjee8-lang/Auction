@@ -7,6 +7,38 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
+
+// Railway runs behind a reverse proxy. Trust the first proxy so Express
+// resolves req.ip from X-Forwarded-For correctly.
+app.set("trust proxy", 1);
+
+const IP_WHITELIST = new Set(
+  (process.env.IP_WHITELIST || "")
+    .split(",")
+    .map(ip => ip.trim())
+    .filter(Boolean)
+);
+
+function ipWhitelist(req, res, next) {
+  const ip = req.ip;
+
+  if (IP_WHITELIST.has(ip)) {
+    return next();
+  }
+
+  console.log(`Blocked IP: ${ip}`);
+  return res.status(403).send(`
+    <!doctype html>
+    <html>
+      <head><meta charset="utf-8"><title>403</title></head>
+      <body style="font-family:sans-serif;text-align:center;padding:80px">
+        <h1>403</h1>
+        <p>Access denied</p>
+      </body>
+    </html>
+  `);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4173);
 const REGION = (process.env.STALZONE_REGION || "RU").toUpperCase();
@@ -277,6 +309,7 @@ function salesAverages(itemId){
   };
 }
 
+app.use(ipWhitelist);
 app.use(express.json());
 app.use(express.static(path.join(__dirname,"public")));
 
