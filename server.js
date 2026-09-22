@@ -7,6 +7,38 @@ import dotenv from "dotenv";
 
 dotenv.config();
 const app = express();
+
+// Railway runs behind a reverse proxy. Trust the first proxy so Express
+// resolves req.ip from X-Forwarded-For correctly.
+app.set("trust proxy", 1);
+
+const IP_WHITELIST = new Set(
+  (process.env.IP_WHITELIST || "")
+    .split(",")
+    .map(ip => ip.trim())
+    .filter(Boolean)
+);
+
+function ipWhitelist(req, res, next) {
+  const ip = req.ip;
+
+  if (IP_WHITELIST.has(ip)) {
+    return next();
+  }
+
+  console.log(`Blocked IP: ${ip}`);
+  return res.status(403).send(`
+    <!doctype html>
+    <html>
+      <head><meta charset="utf-8"><title>403</title></head>
+      <body style="font-family:sans-serif;text-align:center;padding:80px">
+        <h1>403</h1>
+        <p>Access denied</p>
+      </body>
+    </html>
+  `);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4173);
 const REGION = (process.env.STALZONE_REGION || "RU").toUpperCase();
@@ -151,8 +183,9 @@ async function scanOne(item){
   DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
     .run(item.id,now,min,avg,max,lots.length);
 
-  // also refresh a bit of sale history for hot items
-  if(lots.length>0){
+  // Refresh sale history even when there are no active lots. A sold-out item
+  // still has a fresh completed sale in the history endpoint.
+  {
     try{
       const hj=await api(`/auction/${encodeURIComponent(item.id)}/history?limit=50&additional=true`);
       const sales=parseHistory(hj).map(s=>({...s, ts:s.ts||now, raw:s.raw||JSON.stringify(s)}));
@@ -276,6 +309,7 @@ function salesAverages(itemId){
   };
 }
 
+app.use(ipWhitelist);
 app.use(express.json());
 app.use(express.static(path.join(__dirname,"public")));
 
@@ -311,6 +345,7 @@ app.get("/api/market",(_,res)=>{
     const o=getLast.get(x.id);
     const lotRows=getLots.all(x.id);
     const lotsCount=lotRows.length;
+    const totalAmount=lotRows.reduce((sum,l)=>sum+(Number(l.amount)||0),0);
     const lotPrices=lotRows.map(l=>l.price).filter(p=>p>0);
     const minLot=lotRows[0]||null;
     const minP=minLot?.price??(o?.min_price??null);
@@ -362,6 +397,10 @@ app.get("/api/market",(_,res)=>{
       avg_price:lotAvg,
       max_price:lotPrices.length?lotPrices[lotPrices.length-1]:(o?.max_price??null),
       lots:lotsCount,
+      totalAmount:totalAmount>0?totalAmount:null,
+      minAmount:minLot?.amount??null,
+      minTotalPrice:minLot?.price!=null && minLot?.amount!=null ? Math.round(minLot.price*minLot.amount) : null,
+      minUnitPrice:minLot?.price??minP,
       minQlt, minPtn,
       qltLabel:qltLabel(minQlt),
       histMedian:ref,
@@ -389,19 +428,51 @@ app.get("/api/market",(_,res)=>{
 app.get("/api/item/:id",async(req,res)=>{
   const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
   if(!item)return res.status(404).json({error:"item not found"});
+  // Opening an item performs a live refresh of active lots, so a purchased
+  // lot disappears immediately instead of waiting for the background scanner.
+  let lots=[];
+  try{
+    const lj=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
+    lots=parseLots(lj);
+    const now=new Date().toISOString();
+    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+    const lins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
+    const ltx=DB.transaction(a=>{for(const l of a)lins.run(item.id,l.id,l.price,l.amount,l.created,l.raw||JSON.stringify(l),now,l.qlt,l.ptn)});
+    ltx(lots);
+    const prices=lots.map(l=>l.price).filter(p=>p>0).sort((a,b)=>a-b);
+    DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
+      .run(item.id,now,prices[0]||null,prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null,prices.length?prices[prices.length-1]:null,lots.length);
+  }catch{
+    lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(item.id);
+  }
+
   const observations=DB.prepare("SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 2000").all(item.id).reverse();
-  const lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(item.id);
-  let history=[];
+  // Persistent history: save fresh sales, then always read the displayed history
+  // from SQLite. A temporary empty API response never erases saved sales.
   try{
     const j=await api(`/auction/${encodeURIComponent(item.id)}/history?limit=200&additional=true`);
-    history=parseHistory(j);
-    const ins=DB.prepare(`INSERT OR REPLACE INTO sale_observations(item_id,sale_id,ts,price,amount,raw,qlt,ptn) VALUES(?,?,?,?,?,?,?,?)`);
-    for(const s of history)ins.run(item.id,s.id,s.ts,s.price,s.amount,s.raw||JSON.stringify(s),s.qlt,s.ptn);
+    const fresh=parseHistory(j)
+      .filter(x=>x && x.price>0)
+      .map(x=>({...x,ts:x.ts||new Date().toISOString(),raw:x.raw||JSON.stringify(x)}));
+    if(fresh.length){
+      const ins=DB.prepare(`INSERT OR REPLACE INTO sale_observations(item_id,sale_id,ts,price,amount,raw,qlt,ptn) VALUES(?,?,?,?,?,?,?,?)`);
+      const tx=DB.transaction(a=>{
+        for(const x of a)ins.run(item.id,x.id,x.ts,x.price,x.amount,x.raw,x.qlt,x.ptn);
+      });
+      tx(fresh);
+    }
   }catch{}
+
+  let history=DB.prepare(
+    `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
+     FROM sale_observations
+     WHERE item_id=? AND price>0
+     ORDER BY datetime(ts) DESC LIMIT 500`
+  ).all(item.id);
 
   const sa=salesAverages(item.id);
   const salePrices=history.map(h=>h.price).filter(p=>p>0);
-  const lastSale=salePrices[0]??null;
+  const lastSale=history.find(h=>h.price>0)?.price??null;
   const curMin=lots.length?Math.min(...lots.map(l=>l.price)):null;
   const changeVsLastSale=(curMin&&lastSale)?Math.round(((curMin-lastSale)/lastSale)*1000)/10:null;
 
@@ -416,118 +487,6 @@ app.get("/api/item/:id",async(req,res)=>{
       salesAvg:sa.avgAll
     }
   });
-});
-
-
-app.get("/api/item/:id/live",async(req,res)=>{
-  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
-  if(!item)return res.status(404).json({ok:false,error:"item not found"});
-  try{
-    const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-    const lots=parseLots(j);
-    const now=new Date().toISOString();
-
-    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
-    const ins=DB.prepare(
-      `INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn)
-       VALUES(?,?,?,?,?,?,?,?,?)`
-    );
-    const tx=DB.transaction(a=>{
-      for(const x of a)ins.run(
-        item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),
-        now,x.qlt,x.ptn
-      );
-    });
-    tx(lots);
-
-    const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
-    const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
-    const minPrice=prices[0]??null;
-    const maxPrice=prices.length?prices[prices.length-1]:null;
-    const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
-    const minLot=lots.length?lots.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a):null;
-    const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
-
-    DB.prepare(
-      `INSERT OR REPLACE INTO price_observations
-       (item_id,ts,min_price,avg_price,max_price,lots,sales)
-       VALUES(?,?,?,?,?,?,0)`
-    ).run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
-
-    res.json({
-      ok:true,id:item.id,lotsCount:lots.length,minPrice,
-      minUnitPrice:minPrice,minAmount:minLot?.amount??null,
-      minTotalPrice:minLot?.price!=null&&minLot?.amount!=null
-        ?Math.round(minLot.price*minLot.amount):null,
-      maxPrice,avgPrice,totalAmount,ts:now
-    });
-  }catch(e){
-    res.status(502).json({ok:false,error:e.message});
-  }
-});
-
-app.get("/api/favorites/live",async(req,res)=>{
-  const ids=String(req.query.ids||"")
-    .split(",").map(x=>x.trim()).filter(Boolean).slice(0,50);
-  if(!ids.length)return res.json({ok:true,rows:[]});
-
-  const items=DB.prepare(
-    `SELECT * FROM items WHERE id IN (${ids.map(()=>"?").join(",")})`
-  ).all(...ids);
-
-  const queue=[...items], out=[];
-  const worker=async()=>{
-    while(queue.length){
-      const item=queue.shift();
-      try{
-        const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-        const lots=parseLots(j);
-        const now=new Date().toISOString();
-
-        DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
-        const ins=DB.prepare(
-          `INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn)
-           VALUES(?,?,?,?,?,?,?,?,?)`
-        );
-        const tx=DB.transaction(a=>{
-          for(const x of a)ins.run(
-            item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),
-            now,x.qlt,x.ptn
-          );
-        });
-        tx(lots);
-
-        const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
-        const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
-        const minPrice=prices[0]??null;
-        const maxPrice=prices.length?prices[prices.length-1]:null;
-        const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
-        const minLot=lots.length?lots.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a):null;
-        const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
-
-        DB.prepare(
-          `INSERT OR REPLACE INTO price_observations
-           (item_id,ts,min_price,avg_price,max_price,lots,sales)
-           VALUES(?,?,?,?,?,?,0)`
-        ).run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
-
-        out.push({
-          id:item.id,ok:true,lotsCount:lots.length,minPrice,
-          minUnitPrice:minPrice,minAmount:minLot?.amount??null,
-          minTotalPrice:minLot?.price!=null&&minLot?.amount!=null
-            ?Math.round(minLot.price*minLot.amount):null,
-          maxPrice,avgPrice,totalAmount,ts:now
-        });
-      }catch(e){
-        out.push({id:item.id,ok:false,error:e.message});
-      }
-    }
-  };
-
-  await Promise.all(
-    Array.from({length:Math.min(6,items.length)},()=>worker())
-  );
-  res.json({ok:true,rows:out});
 });
 
 
