@@ -17,32 +17,7 @@ const POLL_MS = Number(process.env.POLL_INTERVAL_MS || 45000);
 const CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 5);
 const BATCH_DELAY_MS = Number(process.env.BATCH_DELAY_MS || 200);
 const MAX_ITEMS_PER_CYCLE = Number(process.env.MAX_ITEMS_PER_CYCLE || 400);
-
-// Keep SQLite data outside the deploy filesystem when Railway Volume is attached.
-// Without a volume Railway's deployment filesystem is ephemeral, so a redeploy can
-// replace market.db. With a volume, the same auction/sales database survives deploys.
-const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, "data");
-fs.mkdirSync(DATA_DIR, { recursive: true });
-const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, "market.db");
-
-// One-time migration when a legacy market.db is still present in the old app folder.
-if (!process.env.DB_FILE && process.env.RAILWAY_VOLUME_MOUNT_PATH) {
-  const legacyDb = path.join(__dirname, "market.db");
-  if (!fs.existsSync(DB_FILE) && fs.existsSync(legacyDb)) {
-    try {
-      fs.copyFileSync(legacyDb, DB_FILE);
-      for (const suffix of ["-wal", "-shm"]) {
-        const src = legacyDb + suffix;
-        if (fs.existsSync(src)) fs.copyFileSync(src, DB_FILE + suffix);
-      }
-      console.log(`Migrated legacy SQLite database to ${DB_FILE}`);
-    } catch (e) {
-      console.warn(`Could not migrate legacy SQLite database: ${e.message}`);
-    }
-  }
-}
-
-const DB = new Database(DB_FILE);
+const DB = new Database(process.env.DB_FILE || path.join(__dirname, "market.db"));
 
 DB.pragma("journal_mode = WAL");
 DB.exec(`
@@ -411,32 +386,6 @@ app.get("/api/market",(_,res)=>{
   res.json({updated:lastScan,rows});
 });
 
-app.get("/api/item/:id/live",async(req,res)=>{
-  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
-  if(!item)return res.status(404).json({ok:false,error:"item not found"});
-  try{
-    const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-    const lots=parseLots(j);
-    const now=new Date().toISOString();
-    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
-    const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
-    const tx=DB.transaction(a=>{for(const x of a)ins.run(item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn)});
-    tx(lots);
-    const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
-    const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
-    const minPrice=prices[0]??null;
-    const maxPrice=prices.length?prices[prices.length-1]:null;
-    const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
-    const minLot=lots.length?lots.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a):null;
-    const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
-    DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
-      .run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
-    return res.json({ok:true,id:item.id,lotsCount:lots.length,minPrice,minUnitPrice:minPrice,minAmount:minLot?.amount??null,minTotalPrice:minLot?.price!=null&&minLot?.amount!=null?Math.round(minLot.price*minLot.amount):null,maxPrice,avgPrice,totalAmount,ts:now});
-  }catch(e){
-    return res.status(502).json({ok:false,error:e.message});
-  }
-});
-
 app.get("/api/item/:id",async(req,res)=>{
   const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
   if(!item)return res.status(404).json({error:"item not found"});
@@ -467,6 +416,118 @@ app.get("/api/item/:id",async(req,res)=>{
       salesAvg:sa.avgAll
     }
   });
+});
+
+
+app.get("/api/item/:id/live",async(req,res)=>{
+  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
+  if(!item)return res.status(404).json({ok:false,error:"item not found"});
+  try{
+    const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
+    const lots=parseLots(j);
+    const now=new Date().toISOString();
+
+    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+    const ins=DB.prepare(
+      `INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn)
+       VALUES(?,?,?,?,?,?,?,?,?)`
+    );
+    const tx=DB.transaction(a=>{
+      for(const x of a)ins.run(
+        item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),
+        now,x.qlt,x.ptn
+      );
+    });
+    tx(lots);
+
+    const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
+    const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
+    const minPrice=prices[0]??null;
+    const maxPrice=prices.length?prices[prices.length-1]:null;
+    const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
+    const minLot=lots.length?lots.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a):null;
+    const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
+
+    DB.prepare(
+      `INSERT OR REPLACE INTO price_observations
+       (item_id,ts,min_price,avg_price,max_price,lots,sales)
+       VALUES(?,?,?,?,?,?,0)`
+    ).run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
+
+    res.json({
+      ok:true,id:item.id,lotsCount:lots.length,minPrice,
+      minUnitPrice:minPrice,minAmount:minLot?.amount??null,
+      minTotalPrice:minLot?.price!=null&&minLot?.amount!=null
+        ?Math.round(minLot.price*minLot.amount):null,
+      maxPrice,avgPrice,totalAmount,ts:now
+    });
+  }catch(e){
+    res.status(502).json({ok:false,error:e.message});
+  }
+});
+
+app.get("/api/favorites/live",async(req,res)=>{
+  const ids=String(req.query.ids||"")
+    .split(",").map(x=>x.trim()).filter(Boolean).slice(0,50);
+  if(!ids.length)return res.json({ok:true,rows:[]});
+
+  const items=DB.prepare(
+    `SELECT * FROM items WHERE id IN (${ids.map(()=>"?").join(",")})`
+  ).all(...ids);
+
+  const queue=[...items], out=[];
+  const worker=async()=>{
+    while(queue.length){
+      const item=queue.shift();
+      try{
+        const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
+        const lots=parseLots(j);
+        const now=new Date().toISOString();
+
+        DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+        const ins=DB.prepare(
+          `INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn)
+           VALUES(?,?,?,?,?,?,?,?,?)`
+        );
+        const tx=DB.transaction(a=>{
+          for(const x of a)ins.run(
+            item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),
+            now,x.qlt,x.ptn
+          );
+        });
+        tx(lots);
+
+        const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
+        const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
+        const minPrice=prices[0]??null;
+        const maxPrice=prices.length?prices[prices.length-1]:null;
+        const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
+        const minLot=lots.length?lots.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a):null;
+        const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
+
+        DB.prepare(
+          `INSERT OR REPLACE INTO price_observations
+           (item_id,ts,min_price,avg_price,max_price,lots,sales)
+           VALUES(?,?,?,?,?,?,0)`
+        ).run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
+
+        out.push({
+          id:item.id,ok:true,lotsCount:lots.length,minPrice,
+          minUnitPrice:minPrice,minAmount:minLot?.amount??null,
+          minTotalPrice:minLot?.price!=null&&minLot?.amount!=null
+            ?Math.round(minLot.price*minLot.amount):null,
+          maxPrice,avgPrice,totalAmount,ts:now
+        });
+      }catch(e){
+        out.push({id:item.id,ok:false,error:e.message});
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({length:Math.min(6,items.length)},()=>worker())
+  );
+  res.json({ok:true,rows:out});
 });
 
 

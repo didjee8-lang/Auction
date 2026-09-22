@@ -252,6 +252,9 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 /* Stable lot images: no letter placeholder and no layout jump while icons load. */
 .pcard-icon img{visibility:hidden}
 .pcard-icon{contain:layout paint}
+
+/* Hide hover popup on favorite lots. */
+.fav-tip,.favorite-tip,.ftip{display:none!important;visibility:hidden!important;pointer-events:none!important}
 </style>
 </head>
 <body>
@@ -454,30 +457,27 @@ let favLiveRefreshAt=0;
 async function refreshFavoriteLots(force=false){
   if(favLiveBusy||!favIds.length)return;
   const now=Date.now();
-  if(!force && now-favLiveRefreshAt<10000)return;
+  if(!force && now-favLiveRefreshAt<1400)return;
   favLiveBusy=true; favLiveRefreshAt=now;
   try{
-    const results=await Promise.all(favIds.map(async id=>{
-      try{
-        const j=await (await fetch("/api/item/"+encodeURIComponent(id)+"/live",{cache:"no-store"})).json();
-        return {id,j};
-      }catch{return {id,j:null}}
-    }));
-    for(const {id,j} of results){
-      if(!j?.ok)continue;
-      const r=rows.find(x=>x.id===id); if(!r)continue;
-      r.lots=Number(j.lotsCount||0);
-      r.min_price=j.minPrice??null;
-      r.minUnitPrice=j.minUnitPrice??j.minPrice??null;
-      r.minAmount=j.minAmount??null;
-      r.minTotalPrice=j.minTotalPrice??null;
-      r.max_price=j.maxPrice??null;
-      r.avg_price=j.avgPrice??null;
-      r.totalAmount=j.totalAmount??null;
-      r.ts=j.ts||r.ts;
+    const ids=favIds.map(encodeURIComponent).join(",");
+    const j=await (await fetch("/api/favorites/live?ids="+ids,{cache:"no-store"})).json();
+    for(const x of (j.rows||[])){
+      if(x.ok===false)continue;
+      const r=rows.find(row=>row.id===x.id); if(!r)continue;
+      r.lots=Number(x.lotsCount||0);
+      r.min_price=x.minPrice??null;
+      r.minUnitPrice=x.minUnitPrice??x.minPrice??null;
+      r.minAmount=x.minAmount??null;
+      r.minTotalPrice=x.minTotalPrice??null;
+      r.max_price=x.maxPrice??null;
+      r.avg_price=x.avgPrice??null;
+      r.totalAmount=x.totalAmount??null;
+      r.ts=x.ts||r.ts;
     }
     renderFavs();
-  }finally{favLiveBusy=false}
+  }catch{}
+  finally{favLiveBusy=false}
 }
 
 function renderFavs(){
@@ -950,7 +950,7 @@ function updateCalcSuggest(){
 }
 const itemCache={};
 async function openItem(id,silent){
-  activeId=id;renderCards();renderFavs();
+  activeId=id;window._drawerHistoryAt=0;renderCards();renderFavs();
   $("drawer").classList.add("open");$("overlay").classList.add("show");
   const row=rows.find(r=>r.id===id)||{};const tier=tierBadge(row);
   $("dName").textContent=row.name||id;$("dName").style.color=tier?tier.color:"var(--text)";
@@ -1154,7 +1154,30 @@ async function openItem(id,silent){
       lotFilter.oninput=applyLotFilter;
     }
     if(itemRefreshTimer)clearInterval(itemRefreshTimer);
-    itemRefreshTimer=setInterval(()=>{if(activeId===id && $("drawer").classList.contains("open"))openItem(id,true)},7000);
+    itemRefreshTimer=setInterval(async()=>{
+        if(activeId!==id || !$("drawer").classList.contains("open"))return;
+        try{
+          const live=await (await fetch("/api/item/"+encodeURIComponent(id)+"/live",{cache:"no-store"})).json();
+          if(!live?.ok || activeId!==id)return;
+          const rr=rows.find(x=>x.id===id);
+          if(rr){
+            rr.lots=Number(live.lotsCount||0);
+            rr.min_price=live.minPrice??null;
+            rr.minUnitPrice=live.minUnitPrice??live.minPrice??null;
+            rr.minAmount=live.minAmount??null;
+            rr.minTotalPrice=live.minTotalPrice??null;
+            rr.max_price=live.maxPrice??null;
+            rr.avg_price=live.avgPrice??null;
+            rr.totalAmount=live.totalAmount??null;
+            rr.ts=live.ts||rr.ts;
+          }
+          renderCards();renderFavs();
+          if(!window._drawerHistoryAt || Date.now()-window._drawerHistoryAt>=6000){
+            window._drawerHistoryAt=Date.now();
+            openItem(id,true);
+          }
+        }catch{}
+      },1500);
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
@@ -1193,7 +1216,7 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
 }});
 $("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
-load();updateStatus();setInterval(load,4000);setInterval(updateStatus,3000);
+load();updateStatus();setInterval(load,15000);setInterval(refreshFavoriteLots,1500);setInterval(updateStatus,3000);
 </script>
 </body>
 </html>
