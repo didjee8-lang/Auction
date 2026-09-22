@@ -490,7 +490,6 @@ async function refreshFavoriteLots(force=false){
     const ids=favIds.map(encodeURIComponent).join(",");
     const j=await (await fetch("/api/favorites/live?ids="+ids,{cache:"no-store"})).json();
     for(const x of (j.rows||[])){
-      if(x.ok===false)continue;
       const r=rows.find(row=>row.id===x.id); if(!r)continue;
       r.lots=Number(x.lotsCount||0);
       r.min_price=x.minPrice??null;
@@ -500,6 +499,7 @@ async function refreshFavoriteLots(force=false){
       r.max_price=x.maxPrice??null;
       r.avg_price=x.avgPrice??null;
       r.totalAmount=x.totalAmount??null;
+      r.lastSale=x.lastSale??r.lastSale??null;
       r.ts=x.ts||r.ts;
     }
     const favScrollState=saveScrollState();

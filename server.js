@@ -49,7 +49,10 @@ const POLL_MS = Number(process.env.POLL_INTERVAL_MS || 45000);
 const CONCURRENCY = Number(process.env.SCAN_CONCURRENCY || 5);
 const BATCH_DELAY_MS = Number(process.env.BATCH_DELAY_MS || 200);
 const MAX_ITEMS_PER_CYCLE = Number(process.env.MAX_ITEMS_PER_CYCLE || 400);
-const DB = new Database(process.env.DB_FILE || path.join(__dirname, "market.db"));
+const DATA_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH || (fs.existsSync("/app/data") ? "/app/data" : path.join(__dirname, "data"));
+fs.mkdirSync(DATA_DIR,{recursive:true});
+const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, "market.db");
+const DB = new Database(DB_FILE);
 
 DB.pragma("journal_mode = WAL");
 DB.exec(`
@@ -168,20 +171,58 @@ function qltLabel(q){return q!=null && QLT_LABELS[q]!=null?QLT_LABELS[q]:null;}
 
 
 
-async function scanOne(item){
-  const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-  const lots=parseLots(j);
-  const now=new Date().toISOString();
-  // clear old lots for item then insert fresh
-  DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+async function fetchAllLots(itemId){
+  const pageSize=200;
+  const maxPages=1000;
+  const all=[];
+  const seen=new Set();
+  let offset=0;
+  let total=null;
+
+  for(let page=0; page<maxPages; page++){
+    const j=await api(`/auction/${encodeURIComponent(itemId)}/lots?offset=${offset}&limit=${pageSize}&sort=buyout_price&order=asc&additional=true`);
+    const rawArr=Array.isArray(j)?j:(j?.lots||j?.data?.lots||j?.data||[]);
+    if(!Array.isArray(rawArr)||!rawArr.length) break;
+    if(total==null){
+      const t=Number(j?.total ?? j?.data?.total ?? j?.totalCount ?? j?.count);
+      if(Number.isFinite(t)&&t>=0) total=t;
+    }
+    const parsed=parseLots({lots:rawArr});
+    let added=0;
+    for(const lot of parsed){
+      if(!seen.has(lot.id)){seen.add(lot.id);all.push(lot);added++;}
+    }
+    if(total!=null && seen.size>=total) break;
+    if(rawArr.length<pageSize) break;
+    if(added===0) break;
+    offset+=rawArr.length;
+    await sleep(35);
+  }
+  const now=Date.now();
+  return all.filter(l=>{
+    try{
+      const raw=JSON.parse(l.raw||'{}');
+      if(raw.endTime){const t=new Date(raw.endTime).getTime(); if(Number.isFinite(t)&&t<=now)return false;}
+    }catch{}
+    return true;
+  });
+}
+
+function saveLots(itemId,lots,now=new Date().toISOString()){
+  DB.prepare("DELETE FROM lots WHERE item_id=?").run(itemId);
   const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
-  const tx=DB.transaction(a=>{for(const x of a)ins.run(item.id,x.id,x.price,x.amount,x.created,x.raw,now,x.qlt,x.ptn)});
+  const tx=DB.transaction(a=>{for(const x of a)ins.run(itemId,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn)});
   tx(lots);
-  const prices=lots.map(x=>x.price).sort((a,b)=>a-b);
-  const min=prices[0]||null,max=prices.length?prices[prices.length-1]:null;
-  const avg=prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null;
+  const prices=lots.map(x=>x.price).filter(p=>p>0).sort((a,b)=>a-b);
   DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
-    .run(item.id,now,min,avg,max,lots.length);
+    .run(itemId,now,prices[0]||null,prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null,prices.length?prices[prices.length-1]:null,lots.length);
+  return prices;
+}
+
+async function scanOne(item){
+  const lots=await fetchAllLots(item.id);
+  const now=new Date().toISOString();
+  saveLots(item.id,lots,now);
 
   // Refresh sale history even when there are no active lots. A sold-out item
   // still has a fresh completed sale in the history endpoint.
@@ -450,16 +491,8 @@ app.get("/api/item/:id",async(req,res)=>{
   // lot disappears immediately instead of waiting for the background scanner.
   let lots=[];
   try{
-    const lj=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
-    lots=parseLots(lj);
-    const now=new Date().toISOString();
-    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
-    const lins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
-    const ltx=DB.transaction(a=>{for(const l of a)lins.run(item.id,l.id,l.price,l.amount,l.created,l.raw||JSON.stringify(l),now,l.qlt,l.ptn)});
-    ltx(lots);
-    const prices=lots.map(l=>l.price).filter(p=>p>0).sort((a,b)=>a-b);
-    DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
-      .run(item.id,now,prices[0]||null,prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null,prices.length?prices[prices.length-1]:null,lots.length);
+    lots=await fetchAllLots(item.id);
+    saveLots(item.id,lots,new Date().toISOString());
   }catch{
     lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(item.id);
   }
@@ -510,6 +543,38 @@ app.get("/api/item/:id",async(req,res)=>{
 
 const ICONS_DIR = path.join(__dirname, "public", "icons");
 fs.mkdirSync(ICONS_DIR, { recursive: true });
+
+app.get("/api/item/:id/live",async(req,res)=>{
+  const id=String(req.params.id);
+  try{
+    const lots=await fetchAllLots(id);
+    saveLots(id,lots,new Date().toISOString());
+    res.json({ok:true,id,lots:lots.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null});
+  }catch(e){
+    const cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(id);
+    res.json({ok:false,id,lots:cached.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,error:e.message});
+  }
+});
+
+app.get("/api/favorites/live",async(req,res)=>{
+  const ids=String(req.query.ids||"").split(",").map(x=>decodeURIComponent(x)).filter(Boolean).slice(0,100);
+  const rows=[];
+  for(const id of ids){
+    try{
+      const lots=await fetchAllLots(id);
+      saveLots(id,lots,new Date().toISOString());
+      const item=DB.prepare("SELECT * FROM items WHERE id=?").get(id)||{id,name:id};
+      const last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(id);
+      rows.push({ok:true,id,name:item.name,lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,lastSale:last?.price??null,ts:new Date().toISOString()});
+    }catch(e){
+      const item=DB.prepare("SELECT * FROM items WHERE id=?").get(id)||{id,name:id};
+      const cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(id);
+      const last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(id);
+      rows.push({ok:false,id,name:item.name,lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,lastSale:last?.price??null,error:e.message});
+    }
+  }
+  res.json({rows});
+});
 
 app.get("/api/icon/:id", async (req, res) => {
   const id = String(req.params.id || "").replace(/[^a-zA-Z0-9_-]/g, "");
