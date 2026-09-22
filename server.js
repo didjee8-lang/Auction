@@ -355,13 +355,31 @@ app.get("/api/market",(_,res)=>{
 
     // Same qlt+ptn group for fair comparison
     const sameLots=lotRows.filter(l=>l.qlt===minQlt && l.ptn===minPtn).map(l=>l.price).filter(p=>p>0);
+
+    // IMPORTANT: the market/profit reference must follow the recent sales shown
+    // to the user, not the entire historical database. Old high prices can otherwise
+    // produce a fake profit even when current lots and recent sales are ~900k.
     let saleGroup=[];
-    try { saleGroup=getSalesGroup.all(x.id, minQlt, minQlt, minPtn, minPtn); } catch { saleGroup=[]; }
+    try {
+      saleGroup=DB.prepare(`
+        SELECT price, amount, ts
+        FROM sale_observations
+        WHERE item_id=?
+          AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+          AND (ptn IS ? OR (ptn IS NULL AND ? IS NULL))
+          AND price>0
+        ORDER BY datetime(ts) DESC
+        LIMIT 20
+      `).all(x.id, minQlt, minQlt, minPtn, minPtn);
+    } catch { saleGroup=[]; }
     const salePrices=weightedPrices(saleGroup);
 
     let ref=null, refSource="none", refCount=0, dataOk=false;
     if(salePrices.length>=3){
-      ref=medianOf(salePrices); refSource="sales_qlt_ptn"; refCount=saleGroup.length; dataOk=true;
+      ref=medianOf(salePrices);
+      refSource="recent_sales_20";
+      refCount=saleGroup.length;
+      dataOk=true;
     } else if(sameLots.length>=3){
       // C: only current lots of same rarity+enhancement
       ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=true;
