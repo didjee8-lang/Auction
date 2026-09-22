@@ -141,6 +141,12 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .calc-sum .row{display:flex;justify-content:space-between;margin:5px 0}
 .calc-sum .row b{color:var(--neon2)}
 .calc-sum .g{color:var(--green)}.calc-sum .r{color:var(--red)}
+.calc-details{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.calc-item-info{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.calc-item-info .title{font-weight:700;color:var(--neon2);margin-bottom:7px}
+.calc-item-info .info-row{display:flex;justify-content:space-between;gap:12px;margin:4px 0;color:var(--muted);font-size:11px}
+.calc-item-info .info-row b{color:var(--text)}
+.calc-item-info .info-row b.g{color:var(--green)}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:30;opacity:0;pointer-events:none;transition:opacity .2s}
 .overlay.show{opacity:1;pointer-events:auto}
 .drawer{position:fixed;top:50%;left:50%;width:min(1240px,97vw);height:min(900px,94vh);max-height:94vh;background:var(--panel);border:1px solid var(--border);border-radius:14px;z-index:40;display:flex;flex-direction:column;transform:translate(-50%,-50%) scale(.92);opacity:0;pointer-events:none;transition:transform .18s,opacity .18s;box-shadow:0 20px 60px rgba(0,0,0,.7),0 0 40px var(--glow);overflow:hidden}
@@ -334,21 +340,21 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <input id="calcQ" placeholder="Поиск предмета по названию или ID..." autocomplete="off">
           <div class="suggest" id="calcSuggest"></div>
         </div>
-        <div class="calc-mode" style="display:flex;gap:8px;margin:0 0 10px">
+        <div class="calc-mode" style="display:flex;gap:8px;margin:0 0 10px;flex-wrap:wrap">
           <button type="button" class="chart-tool active" id="calcBuyMode">Покупка</button>
           <button type="button" class="chart-tool" id="calcSellMode">Продажа</button>
-          <span id="calcModeHint" style="align-self:center;color:var(--muted);font-size:11px">Отдельный расчёт покупки</span>
+          <button type="button" class="chart-tool" id="calcTotalSellMode">Общ. продажа</button>
+          <span id="calcModeHint" style="align-self:center;color:var(--muted);font-size:11px">Покупка: общая цена ÷ количество</span>
         </div>
         <table class="calc-table">
           <thead><tr id="calcHead"><th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th></tr></thead>
           <tbody id="calcBody"></tbody>
         </table>
-        <div class="calc-sum" id="calcBuySummary">
-          <div class="row"><span>Общая сумма покупки</span><b id="sumBuy">—</b></div>
-        </div>
+        <div id="calcDetails" class="calc-details"></div>
+        <div class="calc-sum" id="calcBuySummary"><div class="row"><span>Общая сумма покупки</span><b id="sumBuy">—</b></div></div>
         <div class="calc-sum" id="calcSellSummary" style="display:none">
-          <div class="row"><span>Общая цена продажи игроку</span><b id="sumPlayer">—</b></div>
-          <div class="row"><span>Продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
+          <div class="row"><span>Общая продажа игроку</span><b id="sumPlayer">—</b></div>
+          <div class="row"><span>Общая продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
         </div>
       </div>
     </div>
@@ -874,174 +880,34 @@ function renderCatalog(){
   });
 }
 function saveCalc(){
-  localStorage.setItem("sz_calc",JSON.stringify(calcIds));
-  localStorage.setItem("sz_calc_mode",calcMode);
-  localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));
-  localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
-  localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));
-  localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+  localStorage.setItem("sz_calc",JSON.stringify(calcIds));localStorage.setItem("sz_calc_mode",calcMode);
+  localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
+  localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
 }
-function calcNum(v){
-  if(v==null)return NaN;
-  const s=String(v).replace(/\s+/g,"").replace(/,/g,".");
-  return s===""?NaN:Number(s);
-}
-function calcState(){
-  return calcMode==="buy"
-    ? {prices:calcBuyPrices,qty:calcBuyQty}
-    : {prices:calcSellPrices,qty:calcSellQty};
-}
+function calcNum(v){if(v==null)return NaN;const s=String(v).replace(/\s+/g,"").replace(/,/g,".");return s===""?NaN:Number(s)}
+function calcState(){return calcMode==="buy"?{prices:calcBuyPrices,qty:calcBuyQty}:{prices:calcSellPrices,qty:calcSellQty}}
 function recalcCalc(){
-  const state=calcState();
-  let totalBuy=0,totalSale=0,totalAuctionNet=0;
-  let hasBuy=false,hasSale=false,hasAuction=false;
-
-  for(const id of calcIds){
-    const price=calcNum(state.prices[id]);
-    const qty=calcNum(state.qty[id]);
-    const validQty=Number.isFinite(qty)&&qty>0;
-    const validPrice=Number.isFinite(price);
-
-    if(calcMode==="buy"){
-      if(validQty&&validPrice){
-        totalBuy+=price;
-        hasBuy=true;
-      }
-      const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
-      if(tr){
-        const unit=validQty&&validPrice?price/qty:NaN;
-        const unitEl=tr.querySelector(".calc-unit");
-        if(unitEl)unitEl.textContent=Number.isFinite(unit)?fmt(unit):"—";
-      }
-    }else{
-      if(validQty&&validPrice){
-        const saleTotal=price;
-        const unit=saleTotal/qty;
-        const auctionNet=saleTotal*0.95;
-        totalSale+=saleTotal;
-        totalAuctionNet+=auctionNet;
-        hasSale=true;hasAuction=true;
-        const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
-        if(tr){
-          const unitEl=tr.querySelector(".calc-unit");
-          const auctionEl=tr.querySelector(".calc-auction");
-          if(unitEl)unitEl.textContent=Number.isFinite(unit)?fmt(unit):"—";
-          if(auctionEl)auctionEl.textContent=fmt(auctionNet);
-        }
-      }else{
-        const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
-        if(tr){
-          const unitEl=tr.querySelector(".calc-unit");
-          const auctionEl=tr.querySelector(".calc-auction");
-          if(unitEl)unitEl.textContent="—";
-          if(auctionEl)auctionEl.textContent="—";
-        }
-      }
-    }
+  const state=calcState();let totalBuy=0,totalPlayer=0,totalAuction=0,hasBuy=false,hasSale=false;const details=[];
+  for(const id of calcIds){const r=rows.find(x=>x.id===id)||{id,name:id},price=calcNum(state.prices[id]),qty=calcNum(state.qty[id]);const vq=Number.isFinite(qty)&&qty>0,vp=Number.isFinite(price)&&price>=0;let unit=NaN,player=NaN,auction=NaN,commission=NaN;
+    if(vq&&vp){if(calcMode==="buy"){totalBuy+=price;hasBuy=true;unit=price/qty}else if(calcMode==="sell"){unit=price;player=price*qty;commission=player*.05;auction=player-commission;totalPlayer+=player;totalAuction+=auction;hasSale=true}else{player=price;unit=price/qty;commission=player*.05;auction=player-commission;totalPlayer+=player;totalAuction+=auction;hasSale=true}}
+    const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);if(tr){const u=tr.querySelector('.calc-unit'),a=tr.querySelector('.calc-auction'),pl=tr.querySelector('.calc-player');if(u)u.textContent=Number.isFinite(unit)?fmt(unit):'—';if(a)a.textContent=Number.isFinite(auction)?fmt(auction):'—';if(pl)pl.textContent=Number.isFinite(player)?fmt(player):'—'}
+    let h=`<div class="calc-item-info"><div class="title">${esc(r.name||id)}</div>`;
+    if(calcMode==="buy")h+=`<div class="info-row"><span>Количество</span><b>${vq?fmt(qty):'—'}</b></div><div class="info-row"><span>Общая цена покупки</span><b>${vp?fmt(price):'—'}</b></div><div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):'—'}</b></div>`;
+    else if(calcMode==="sell")h+=`<div class="info-row"><span>Цена за 1 шт.</span><b>${vp?fmt(price):'—'}</b></div><div class="info-row"><span>Количество</span><b>${vq?fmt(qty):'—'}</b></div><div class="info-row"><span>Продажа игроку</span><b>${Number.isFinite(player)?fmt(player):'—'}</b></div><div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):'—'}</b></div><div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):'—'}</b></div>`;
+    else h+=`<div class="info-row"><span>Общая цена товара</span><b>${vp?fmt(price):'—'}</b></div><div class="info-row"><span>Количество</span><b>${vq?fmt(qty):'—'}</b></div><div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):'—'}</b></div><div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):'—'}</b></div><div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):'—'}</b></div>`;
+    details.push(h+'</div>');
   }
-
-  $("sumBuy").textContent=hasBuy?fmt(totalBuy):"—";
-  $("sumPlayer").textContent=hasSale?fmt(totalSale):"—";
-  $("sumAuctionNet").textContent=hasAuction?fmt(totalAuctionNet):"—";
+  $("sumBuy").textContent=hasBuy?fmt(totalBuy):'—';$("sumPlayer").textContent=hasSale?fmt(totalPlayer):'—';$("sumAuctionNet").textContent=hasSale?fmt(totalAuction):'—';$("calcDetails").innerHTML=details.join('');
 }
-function updateCalcMode(){
-  const buy=calcMode==="buy";
-  $("calcBuyMode").classList.toggle("active",buy);
-  $("calcSellMode").classList.toggle("active",!buy);
-  $("calcModeHint").textContent=buy
-    ?"Отдельный расчёт покупки"
-    :"Отдельный расчёт продажи: игроку и на аукционе −5% комиссии";
-  $("calcHead").innerHTML=buy
-    ? '<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>'
-    : '<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';
-  $("calcBuySummary").style.display=buy?"block":"none";
-  $("calcSellSummary").style.display=buy?"none":"block";
-}
+function updateCalcMode(){const buy=calcMode==="buy",sell=calcMode==="sell",total=calcMode==="totalSell";$("calcBuyMode").classList.toggle('active',buy);$("calcSellMode").classList.toggle('active',sell);$("calcTotalSellMode").classList.toggle('active',total);$("calcModeHint").textContent=buy?'Покупка: общая цена ÷ количество':sell?'Продажа: цена за 1 шт. × количество':'Общ. продажа: общая цена ÷ количество, аукцион −5%';$("calcHead").innerHTML=buy?'<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>':sell?'<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>':'<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';$("calcBuySummary").style.display=buy?'block':'none';$("calcSellSummary").style.display=buy?'none':'block'}
 function renderCalc(){
-  const focused=document.activeElement;
-  const restore=focused&&focused.matches?.('#calcBody input[data-qty-id],#calcBody input[data-price-id]')
-    ? {kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,
-       start:focused.selectionStart,end:focused.selectionEnd,
-       scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;
-
-  updateCalcMode();
-  const state=calcState();
-  if(!calcIds.length){
-    $("calcBody").innerHTML=`<tr><td colspan="${calcMode==="buy"?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
-    recalcCalc();
-    return;
-  }
-
-  $("calcBody").innerHTML=calcIds.map(id=>{
-    const r=rows.find(x=>x.id===id)||{id,name:id};
-    const price=state.prices[id]??"";
-    const qty=state.qty[id]??"";
-    return calcMode==="buy"
-      ? `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
-        <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td>
-        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td>
-        <td class="calc-unit">—</td>
-        <td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`
-      : `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
-        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td>
-        <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td>
-        <td class="calc-unit">—</td>
-        <td class="calc-auction">—</td>
-        <td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
-  }).join("");
-
-  $("calcBody").querySelectorAll("input[data-price-id]").forEach(inp=>{
-    inp.oninput=()=>{
-      const id=inp.dataset.priceId;
-      const state=calcState();
-      const raw=inp.value.replace(/[^0-9.,]/g,"");
-      if(raw!==inp.value)inp.value=raw;
-      if(raw.trim()==="")delete state.prices[id]; else state.prices[id]=raw;
-      saveCalc();recalcCalc();
-    };
-  });
-
-  $("calcBody").querySelectorAll("input[data-qty-id]").forEach(inp=>{
-    inp.oninput=()=>{
-      const id=inp.dataset.qtyId;
-      const state=calcState();
-      const raw=inp.value.replace(/[^0-9]/g,"");
-      if(raw!==inp.value)inp.value=raw;
-      if(raw.trim()==="")delete state.qty[id]; else state.qty[id]=raw;
-      saveCalc();recalcCalc();
-    };
-    inp.onkeydown=e=>{
-      if(e.key==="Enter"){
-        e.preventDefault();
-        const tr=inp.closest("tr");
-        const priceInp=tr&&tr.querySelector("input[data-price-id]");
-        if(priceInp){priceInp.focus();priceInp.select()}
-      }
-    };
-  });
-
-  $("calcBody").querySelectorAll(".rm").forEach(btn=>{
-    btn.onclick=()=>{
-      calcIds=calcIds.filter(x=>x!==btn.dataset.id);
-      delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];
-      delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];
-      saveCalc();renderCalc();
-    };
-  });
-
-  recalcCalc();
-  if(restore){
-    requestAnimationFrame(()=>{
-      const attr=restore.kind==='qty'?'data-qty-id':'data-price-id';
-      const el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);
-      if(el){
-        el.focus({preventScroll:true});
-        try{el.setSelectionRange(restore.start,restore.end)}catch{}
-        const sc=document.querySelector('#calcPane .scroll');
-        if(sc)sc.scrollTop=restore.scroll;
-      }
-    });
-  }
+  const focused=document.activeElement;const restore=focused&&focused.matches?.('#calcBody input[data-qty-id],#calcBody input[data-price-id]')?{kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,start:focused.selectionStart,end:focused.selectionEnd,scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;updateCalcMode();const state=calcState();
+  if(!calcIds.length){$("calcBody").innerHTML=`<tr><td colspan="${calcMode==='buy'?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;$("calcDetails").innerHTML='';recalcCalc();return}
+  $("calcBody").innerHTML=calcIds.map(id=>{const r=rows.find(x=>x.id===id)||{id,name:id},price=state.prices[id]??'',qty=state.qty[id]??'';if(calcMode==='buy')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td><td class="calc-unit">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`}).join('');
+  $("calcBody").querySelectorAll('input[data-price-id]').forEach(inp=>inp.oninput=()=>{const id=inp.dataset.priceId,state=calcState(),raw=inp.value.replace(/[^0-9.,]/g,'');if(raw!==inp.value)inp.value=raw;if(!raw.trim())delete state.prices[id];else state.prices[id]=raw;saveCalc();recalcCalc()});
+  $("calcBody").querySelectorAll('input[data-qty-id]').forEach(inp=>{inp.oninput=()=>{const id=inp.dataset.qtyId,state=calcState(),raw=inp.value.replace(/[^0-9]/g,'');if(raw!==inp.value)inp.value=raw;if(!raw.trim())delete state.qty[id];else state.qty[id]=raw;saveCalc();recalcCalc()};inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const x=inp.closest('tr')?.querySelector('input[data-price-id]');if(x){x.focus();x.select()}}}});
+  $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{calcIds=calcIds.filter(x=>x!==btn.dataset.id);delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];saveCalc();renderCalc()});recalcCalc();
+  if(restore)requestAnimationFrame(()=>{const attr=restore.kind==='qty'?'data-qty-id':'data-price-id',el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);if(el){el.focus({preventScroll:true});try{el.setSelectionRange(restore.start,restore.end)}catch{}const sc=document.querySelector('#calcPane .scroll');if(sc)sc.scrollTop=restore.scroll}})
 }
 function updateCalcSuggest(){
   const q=($("calcQ").value||"").trim().toLowerCase();
@@ -1329,6 +1195,7 @@ $("closeBtn").onclick=closeDrawer;$("overlay").onclick=closeDrawer;
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classList.contains("open"))closeDrawer()});
 $("calcBuyMode").onclick=()=>{calcMode="buy";saveCalc();renderCalc()};
 $("calcSellMode").onclick=()=>{calcMode="sell";saveCalc();renderCalc()};
+$("calcTotalSellMode").onclick=()=>{calcMode="totalSell";saveCalc();renderCalc()};
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
