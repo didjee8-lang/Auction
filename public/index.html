@@ -273,6 +273,10 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .trade-metric b.r{color:var(--red)}
 @media(max-width:900px){.trade-item{gap:8px;padding:6px 7px}.trade-name{flex-basis:115px}.trade-metrics{gap:9px}.trade-metric small{font-size:8px}.trade-metric b{font-size:10px}}
 @media(max-width:600px){.trade-item{align-items:flex-start;flex-direction:column;gap:4px}.trade-name{width:100%;flex-basis:auto}.trade-metrics{width:100%;overflow-x:auto;padding-bottom:1px}}
+
+/* v3 market intelligence */
+.ai-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:10px}.ai-card{background:linear-gradient(180deg,#101010,#090909);border:1px solid var(--border);border-radius:10px;padding:10px}.ai-card .k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.ai-card .v{font-size:18px;font-weight:800;margin-top:3px}.ai-card .s{font-size:10px;color:var(--muted);margin-top:2px}.ai-section{margin:0 10px 10px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#090909}.ai-section-head{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-bottom:1px solid var(--border);font-weight:700}.ai-table{width:100%;border-collapse:collapse;font-size:11px}.ai-table th,.ai-table td{padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.06);text-align:left;white-space:nowrap}.ai-table th{color:var(--muted);font-weight:600}.ai-table tr:last-child td{border-bottom:0}.ai-good{color:var(--green)}.ai-bad{color:var(--red)}.ai-warn{color:var(--yellow)}.ai-muted{color:var(--muted)}.ai-tools{display:flex;gap:6px;flex-wrap:wrap;padding:10px}.ai-tools button{border:1px solid var(--border);background:#111;color:var(--text);border-radius:7px;padding:6px 9px;cursor:pointer}.ai-tools button.on,.ai-tools button:hover{border-color:var(--neon);color:#fff;background:#181010}.ai-empty{padding:18px;text-align:center;color:var(--muted)}.watch-row{display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.06)}.watch-row:last-child{border-bottom:0}.small-btn{border:1px solid var(--border);background:#111;color:var(--text);border-radius:6px;padding:4px 7px;cursor:pointer}
+@media(max-width:900px){.ai-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
@@ -320,6 +324,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
     <div class="pane-head" id="rightHead">
       <div class="tabs" id="mainTabs">
         <div class="tab active" data-tab="catalog">Каталог</div>
+        <div class="tab" data-tab="analytics">Аналитика</div>
         <div class="tab" data-tab="calc">Калькулятор</div>
       </div>
       <div id="catHead" style="display:none;align-items:center;width:100%">
@@ -335,7 +340,11 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
       <div id="catItemsPane" style="display:none">
         <div class="cards" id="catItemsGrid"></div>
       </div>
-      <div id="calcPane" style="display:none">
+      <div id="analyticsPane" style="display:none">
+        <div class="ai-tools">
+          <button class="on" data-ai-sort="opportunity">⚡ Возможности</button><button data-ai-sort="liquidity">💧 Ликвидность</button><button data-ai-sort="growth">📈 Рост</button><button data-ai-sort="drop">📉 Падение</button><button data-ai-sort="turnover">💰 Оборот</button><button id="aiNotifyBtn">🔔 Уведомления</button>
+        </div><div id="analyticsBody"></div>
+      </div><div id="calcPane" style="display:none">
         <div class="calc-search">
           <input id="calcQ" placeholder="Поиск предмета по названию или ID..." autocomplete="off">
           <div class="suggest" id="calcSuggest"></div>
@@ -374,6 +383,9 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 const $=id=>document.getElementById(id);
 let rows=[],filter="all",sortBy="new",activeId=null,catFilter="",rightTab="catalog";
 let activeCategory=null;
+let aiSort="opportunity";
+let marketSnapshots=JSON.parse(localStorage.getItem("sz_market_snapshots")||"{}");
+let priceHunts=JSON.parse(localStorage.getItem("sz_price_hunts")||"[]");
 let calcIds=JSON.parse(localStorage.getItem("sz_calc")||"[]");
 let calcMode=localStorage.getItem("sz_calc_mode")||"buy";
 let calcBuyPrices=JSON.parse(localStorage.getItem("sz_calc_buy_prices")||"{}");
@@ -633,14 +645,14 @@ function renderHunt(){
       else if(pct<=0.15){cls+=" near";tag=" ≈ ближайшая +"+fmt(diff);}
       else{cls+=" near";tag=" ближайшая +"+fmt(diff);}
     }else if(r.status==="cheap"){cls+=" deal";tag=" ниже рынка";}
-    return`<div class="${cls}" data-id="${esc(r.id)}">
+    return`<div class="${cls}" data-id="${esc(r.id)}" ${Number.isFinite(target)?`data-hunt-add="${esc(r.id)}" data-hunt-price="${target}" title="Сохранить эту цену в охоту"`:''}>
       <div class="hn">${esc(r.name||r.id)}</div>
       <div class="hp">${fmt(unit)} / шт.${tag?` <span class="sub">${tag}</span>`:""}</div>
       <div class="hm">${fmtN(r.lots)} лот. · ${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</div>
     </div>`;
   }).join("");
   box.innerHTML=cards;
-  box.querySelectorAll(".hunt-card").forEach(el=>el.onclick=()=>openItem(el.dataset.id));
+  box.querySelectorAll(".hunt-card").forEach(el=>el.onclick=()=>{const id=el.dataset.id;if(Number.isFinite(target)){const price=Number(el.dataset.huntPrice);if(id&&price>0&&!priceHunts.some(x=>x.id===id&&Number(x.price)===price)){priceHunts.push({id,price});localStorage.setItem("sz_price_hunts",JSON.stringify(priceHunts));renderAnalytics()}}openItem(id)});
 }
 const QLT_RU={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
 const CAT_RU={armor:"Броня",armour:"Броня",armor_style:"Стили брони",artefact:"Артефакты",attachment:"Обвесы",backpacks:"Рюкзаки",consumables:"Расходники",containers:"Контейнеры",device:"Устройства",misc:"Разное",other:"Прочее",weapon:"Оружие",weapon_modules:"Модули оружия",weapon_style:"Стили оружия"};
@@ -1185,7 +1197,22 @@ async function openItem(id,silent){
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
-async function load(){try{const j=await(await fetch("/api/market",{cache:"no-store"})).json();rows=j.rows||[];renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();
+function aiNum(v){const n=Number(v);return Number.isFinite(n)?n:null}
+function aiPrice(r){return aiNum(r.minUnitPrice??r.min_price)}
+function aiFair(r){const vals=[r.fairPrice,r.fair_price,r.medianPrice,r.median_price,r.avg_price,r.avgPrice].map(aiNum).filter(v=>v!=null&&v>0);return vals.length?vals[0]:aiPrice(r)}
+function aiSoldDay(r){return aiNum(r.soldPerDay??r.salesPerDay??r.sold_per_day)??0}
+function aiTurnover(r){const p=aiFair(r);return p==null?0:p*aiSoldDay(r)}
+function aiSnapshot(){const now=Date.now(),day=86400000;for(const r of rows){const p=aiPrice(r);if(p==null||p<=0)continue;const a=marketSnapshots[r.id]||[],last=a[a.length-1];if(!last||now-last.t>30*60000||Math.abs(last.p-p)>0){a.push({t:now,p});while(a.length>50||a[0].t<now-30*day)a.shift();marketSnapshots[r.id]=a}}localStorage.setItem("sz_market_snapshots",JSON.stringify(marketSnapshots))}
+function aiChange(r,days){const a=marketSnapshots[r.id]||[],cut=Date.now()-days*86400000,p=aiPrice(r);if(!p||!a.length)return null;let old=null;for(let i=a.length-1;i>=0;i--)if(a[i].t<=cut){old=a[i].p;break}return old?((p-old)/old*100):null}
+function aiLiquidity(r){const s=aiSoldDay(r),lots=aiNum(r.lots)||0;return Math.max(0,Math.min(100,Math.log10(1+s)*35+Math.min(lots,100)/5))}
+function aiConfidence(r){const s=aiSoldDay(r),p=aiPrice(r),f=aiFair(r);if(!p||!f)return 15;let c=Math.min(70,10+Math.log10(1+s)*25);if(r.dataOk!==false)c+=20;if(Math.abs(p-f)/f<.15)c+=10;return Math.round(Math.min(100,c))}
+function aiOpportunity(r){const p=aiPrice(r),f=aiFair(r);if(!p||!f||f<=p)return -999;return ((f-p)/p*100)*.55+aiLiquidity(r)*.25+aiConfidence(r)*.20}
+function aiFormatPct(v){return v==null?'—':(v>=0?'+':'')+v.toFixed(1)+'%'}
+function aiSortRows(list){return list.slice().sort((a,b)=>{if(aiSort==='liquidity')return aiLiquidity(b)-aiLiquidity(a);if(aiSort==='growth')return (aiChange(b,7)||-999)-(aiChange(a,7)||-999);if(aiSort==='drop')return (aiChange(a,7)||999)-(aiChange(b,7)||999);if(aiSort==='turnover')return aiTurnover(b)-aiTurnover(a);return aiOpportunity(b)-aiOpportunity(a)})}
+function renderAnalytics(){const body=$("analyticsBody");if(!body)return;const list=rows.filter(r=>(r.lots||0)>0&&!isExcl(r.id));if(!list.length){body.innerHTML='<div class="ai-empty">Нет данных рынка</div>';return}const totalLots=list.reduce((a,r)=>a+(aiNum(r.lots)||0),0),turnover=list.reduce((a,r)=>a+aiTurnover(r),0),hot=aiSortRows(list).slice(0,15),top=hot[0];body.innerHTML=`<div class="ai-grid"><div class="ai-card"><div class="k">Предметов</div><div class="v">${fmtN(list.length)}</div><div class="s">с активными лотами</div></div><div class="ai-card"><div class="k">Активных лотов</div><div class="v">${fmtN(totalLots)}</div><div class="s">загруженный рынок</div></div><div class="ai-card"><div class="k">Оборот / день</div><div class="v">${fmt(turnover)}</div><div class="s">Fair Price × продажи/день</div></div><div class="ai-card"><div class="k">Главный сигнал</div><div class="v" style="font-size:14px">${top?'⚡ '+esc(top.name||top.id):'—'}</div><div class="s">потенциал ${top?aiFormatPct((aiFair(top)-aiPrice(top))/aiPrice(top)*100):'—'}</div></div></div><div class="ai-section"><div class="ai-section-head"><span>⚡ Возможности рынка</span><span class="ai-muted">${esc(aiSort)}</span></div><table class="ai-table"><thead><tr><th>Предмет</th><th>Сейчас</th><th>Fair</th><th>Потенциал</th><th>Продаж/день</th><th>Ликв.</th><th>Доверие</th><th></th></tr></thead><tbody>${hot.map(r=>{const p=aiPrice(r),f=aiFair(r),roi=p&&f?(f-p)/p*100:null;return `<tr><td><b>${esc(r.name||r.id)}</b></td><td>${p!=null?fmt(p):'—'}</td><td>${f!=null?fmt(f):'—'}</td><td class="${roi>0?'ai-good':roi<0?'ai-bad':''}">${aiFormatPct(roi)}</td><td>${fmtN(aiSoldDay(r))}</td><td>${Math.round(aiLiquidity(r))}</td><td>${aiConfidence(r)}%</td><td><button class="small-btn" data-ai-open="${esc(r.id)}">Открыть</button></td></tr>`}).join('')}</tbody></table></div><div class="ai-section"><div class="ai-section-head"><span>🔔 Охота за ценой</span><button class="small-btn" id="aiClearHunts">Очистить</button></div>${priceHunts.length?priceHunts.map((h,i)=>{const r=rows.find(x=>x.id===h.id),p=r&&aiPrice(r),ok=p!=null&&p<=Number(h.price);return `<div class="watch-row"><span><b>${esc(r?.name||h.id)}</b><br><small class="ai-muted">цель ${fmt(h.price)}</small></span><span>${p!=null?fmt(p):'—'}</span><span class="${ok?'ai-good':'ai-muted'}">${ok?'🟢 найдено':'ожидание'}</span><button class="small-btn" data-ai-delhunt="${i}">×</button></div>`}).join(''):'<div class="ai-empty">Добавь предмет в «Охоту», чтобы сохранить ценовой порог.</div>'}</div>`;body.querySelectorAll('[data-ai-open]').forEach(b=>b.onclick=()=>openItem(b.dataset.aiOpen));body.querySelectorAll('[data-ai-delhunt]').forEach(b=>b.onclick=()=>{priceHunts.splice(Number(b.dataset.aiDelhunt),1);localStorage.setItem('sz_price_hunts',JSON.stringify(priceHunts));renderAnalytics()});const clr=$("aiClearHunts");if(clr)clr.onclick=()=>{priceHunts=[];localStorage.setItem('sz_price_hunts','[]');renderAnalytics()}}
+function checkPriceHunts(){if(!priceHunts.length)return;const now=Date.now(),sent=JSON.parse(localStorage.getItem("sz_hunt_notified")||"{}");let changed=false;for(const h of priceHunts){const r=rows.find(x=>x.id===h.id),p=r&&aiPrice(r),key=h.id+"|"+h.price;if(p!=null&&p<=Number(h.price)&&window.Notification?.permission==='granted'&&now-(sent[key]||0)>3600000){try{new Notification('STALZONE: найден лот',{body:(r.name||r.id)+' — '+fmt(p)})}catch{}sent[key]=now;changed=true}}if(changed)localStorage.setItem("sz_hunt_notified",JSON.stringify(sent))}
+function enableNotifications(){if(!('Notification' in window)){alert('Браузер не поддерживает уведомления');return}Notification.requestPermission().then(x=>alert(x==='granted'?'Уведомления включены':'Разрешение не выдано'))}
+async function load(){try{const j=await(await fetch("/api/market",{cache:"no-store"})).json();rows=j.rows||[];aiSnapshot();renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();renderAnalytics();checkPriceHunts();
     if(rightTab==="catalog")renderCatalog();if(rightTab==="calc")renderCalc();
     refreshFavoriteLots();
   }catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
@@ -1199,9 +1226,12 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classLi
 $("calcBuyMode").onclick=()=>{calcMode="buy";saveCalc();renderCalc()};
 $("calcSellMode").onclick=()=>{calcMode="sell";saveCalc();renderCalc()};
 $("calcTotalSellMode").onclick=()=>{calcMode="totalSell";saveCalc();renderCalc()};
+document.querySelectorAll('[data-ai-sort]').forEach(b=>b.onclick=()=>{aiSort=b.dataset.aiSort;document.querySelectorAll('[data-ai-sort]').forEach(x=>x.classList.remove('on'));b.classList.add('on');renderAnalytics()});
+$("aiNotifyBtn").onclick=enableNotifications;
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
+$("huntResults").addEventListener("click",e=>{const b=e.target.closest('[data-hunt-add]');if(!b)return;const id=b.dataset.huntAdd,price=Number(b.dataset.huntPrice);if(!price||!id)return;if(!priceHunts.some(x=>x.id===id&&Number(x.price)===price))priceHunts.push({id,price});localStorage.setItem('sz_price_hunts',JSON.stringify(priceHunts));renderAnalytics()});
 document.querySelectorAll(".chips .chip").forEach(c=>{
   c.onclick=()=>{
     if(c.dataset.s==="profit"){sortBy=sortBy==="profit"?"new":"profit";c.classList.toggle("active",sortBy==="profit");renderCards();return}
@@ -1215,8 +1245,10 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
   $("catHead").style.display="none";$("mainTabs").style.display="flex";
   $("catalogPane").style.display=rightTab==="catalog"?"block":"none";
   $("catItemsPane").style.display="none";
+  $("analyticsPane").style.display=rightTab==="analytics"?"block":"none";
   $("calcPane").style.display=rightTab==="calc"?"block":"none";
   if(rightTab==="catalog")renderCatalog();
+  if(rightTab==="analytics")renderAnalytics();
   if(rightTab==="calc")renderCalc();
 }});
 $("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
