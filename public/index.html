@@ -255,6 +255,18 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 
 /* Hide hover popup on favorite lots. */
 .fav-tip,.favorite-tip,.ftip{display:none!important;visibility:hidden!important;pointer-events:none!important}
+
+/* Компактные строки трейда */
+.trade-item{display:flex;align-items:center;gap:12px;padding:7px 9px;margin-top:5px;background:var(--bg);border:1px solid var(--border);border-radius:7px;min-width:0}
+.trade-name{flex:0 1 150px;min-width:90px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trade-metrics{display:flex;align-items:center;gap:14px;flex:1;min-width:0;overflow:hidden}
+.trade-metric{display:flex;align-items:baseline;gap:4px;white-space:nowrap;min-width:0}
+.trade-metric small{color:var(--muted);font-size:9px}
+.trade-metric b{font-size:11px;color:var(--text)}
+.trade-metric b.g{color:var(--green)}
+.trade-metric b.r{color:var(--red)}
+@media(max-width:900px){.trade-item{gap:8px;padding:6px 7px}.trade-name{flex-basis:115px}.trade-metrics{gap:9px}.trade-metric small{font-size:8px}.trade-metric b{font-size:10px}}
+@media(max-width:600px){.trade-item{align-items:flex-start;flex-direction:column;gap:4px}.trade-name{width:100%;flex-basis:auto}.trade-metrics{width:100%;overflow-x:auto;padding-bottom:1px}}
 </style>
 </head>
 <body>
@@ -921,12 +933,13 @@ function recalcCalc(){
 
         const box=document.createElement("div");
         box.className="trade-item";
-        box.style.cssText="padding:10px 0;border-top:1px solid var(--line);margin-top:8px";
-        box.innerHTML=`<div style="font-weight:700;margin-bottom:6px">${name}</div>
-          <div class="row"><span>Покупка по аукциону</span><b>${Number.isFinite(buyTotal)?fmt(buyTotal):"—"}</b></div>
-          <div class="row"><span>Продажа игроку</span><b>${Number.isFinite(sellTotal)?fmt(sellTotal):"—"}</b></div>
-          <div class="row"><span>Прибыль без комиссии</span><b class="${Number.isFinite(profit)?(profit>=0?"g":"r"):""}">${Number.isFinite(profit)?(profit>0?"+":"")+fmt(profit):"—"}</b></div>
-          <div class="row"><span>Доходность</span><b class="${Number.isFinite(pct)?(pct>=0?"g":"r"):""}">${Number.isFinite(pct)?(pct>0?"+":"")+pct.toFixed(1)+"%":"—"}</b></div>`;
+        box.innerHTML=`<div class="trade-name" title="${esc(name)}">${esc(name)}</div>
+          <div class="trade-metrics">
+            <span class="trade-metric"><small>Покупка</small><b>${Number.isFinite(buyTotal)?fmt(buyTotal):"—"}</b></span>
+            <span class="trade-metric"><small>Продажа</small><b>${Number.isFinite(sellTotal)?fmt(sellTotal):"—"}</b></span>
+            <span class="trade-metric"><small>Прибыль</small><b class="${Number.isFinite(profit)?(profit>=0?"g":"r"):""}">${Number.isFinite(profit)?(profit>0?"+":"")+fmt(profit):"—"}</b></span>
+            <span class="trade-metric"><small>Доходность</small><b class="${Number.isFinite(pct)?(pct>=0?"g":"r"):""}">${Number.isFinite(pct)?(pct>0?"+":"")+pct.toFixed(1)+"%":"—"}</b></span>
+          </div>`;
         tradeRows.appendChild(box);
       }
     }
