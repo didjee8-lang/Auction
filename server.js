@@ -411,6 +411,32 @@ app.get("/api/market",(_,res)=>{
   res.json({updated:lastScan,rows});
 });
 
+app.get("/api/item/:id/live",async(req,res)=>{
+  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
+  if(!item)return res.status(404).json({ok:false,error:"item not found"});
+  try{
+    const j=await api(`/auction/${encodeURIComponent(item.id)}/lots?limit=200&sort=buyout_price&order=asc&additional=true`);
+    const lots=parseLots(j);
+    const now=new Date().toISOString();
+    DB.prepare("DELETE FROM lots WHERE item_id=?").run(item.id);
+    const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
+    const tx=DB.transaction(a=>{for(const x of a)ins.run(item.id,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn)});
+    tx(lots);
+    const prices=lots.map(x=>Number(x.price)).filter(Number.isFinite).sort((a,b)=>a-b);
+    const amounts=lots.map(x=>Number(x.amount)).filter(Number.isFinite);
+    const minPrice=prices[0]??null;
+    const maxPrice=prices.length?prices[prices.length-1]:null;
+    const avgPrice=prices.length?Math.round(prices.reduce((a,b)=>a+b,0)/prices.length):null;
+    const minLot=lots.length?lots.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a):null;
+    const totalAmount=amounts.length?amounts.reduce((a,b)=>a+b,0):null;
+    DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
+      .run(item.id,now,minPrice,avgPrice,maxPrice,lots.length);
+    return res.json({ok:true,id:item.id,lotsCount:lots.length,minPrice,minUnitPrice:minPrice,minAmount:minLot?.amount??null,minTotalPrice:minLot?.price!=null&&minLot?.amount!=null?Math.round(minLot.price*minLot.amount):null,maxPrice,avgPrice,totalAmount,ts:now});
+  }catch(e){
+    return res.status(502).json({ok:false,error:e.message});
+  }
+});
+
 app.get("/api/item/:id",async(req,res)=>{
   const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
   if(!item)return res.status(404).json({error:"item not found"});

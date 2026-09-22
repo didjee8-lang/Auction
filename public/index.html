@@ -152,7 +152,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 
 .table-panels{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:0;overflow:hidden}.table-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.table-panel .mini{flex:1;min-height:0}.drawer-top{display:grid;grid-template-columns:1fr auto;gap:7px}.drawer-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.drawer-tools .rec{padding:6px 9px;display:flex;gap:12px;align-items:center}.drawer-tools .rec-row{margin:0;font-size:11px;gap:4px}.chart-box{height:170px;min-height:150px}.chart-tools{margin:0 0 4px}.metric-line{margin:0;display:flex;gap:5px;flex-wrap:nowrap;overflow:hidden}.metric-pill{padding:4px 7px;font-size:9px;white-space:nowrap}.market-note{font-size:10px;padding:6px 8px}.drawer .btn-sm{margin:0}.drawer .stat{padding:6px}.drawer .stat .lbl{font-size:9px}.drawer .stat .val{font-size:13px}
 .drawer-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)}
-.drawer-head .icon,.drawer-head .icon-ph{width:52px;height:52px;border-radius:10px;background:var(--card);object-fit:contain;border:1px solid rgba(255,42,42,.1)}
+.drawer-head .icon,.drawer-head .icon-ph{width:52px;height:52px;min-width:52px;min-height:52px;border-radius:10px;background:var(--card);border:1px solid rgba(255,42,42,.1);background-repeat:no-repeat;background-position:center;background-size:contain;pointer-events:none;user-select:none}
 .drawer-head .icon-ph{display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--muted);font-size:18px}
 .drawer-head h2{flex:1;font-size:15px;font-weight:700}
 .drawer-head .close{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;transition:color .15s}
@@ -250,7 +250,6 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 }
 
 /* Stable lot images: no letter placeholder and no layout jump while icons load. */
-.pcard-icon img,.fav-icon img,.drawer-head .icon{display:block;width:100%;height:100%;object-fit:contain}
 .pcard-icon img{visibility:hidden}
 .pcard-icon{contain:layout paint}
 </style>
@@ -342,7 +341,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 <div class="overlay" id="overlay"></div>
 <div class="drawer" id="drawer">
   <div class="drawer-head">
-    <img class="icon" id="dIcon" style="display:none;pointer-events:none" alt="">
+    <div class="icon" id="dIcon" style="display:none" aria-hidden="true"></div>
     <div class="icon-ph" id="dIconPh">?</div>
     <h2 id="dName">—</h2>
     <button class="close" id="closeBtn">×</button>
@@ -450,6 +449,37 @@ function renderTplBar(){
     saveTpls();renderTplBar();
   };
 }
+let favLiveBusy=false;
+let favLiveRefreshAt=0;
+async function refreshFavoriteLots(force=false){
+  if(favLiveBusy||!favIds.length)return;
+  const now=Date.now();
+  if(!force && now-favLiveRefreshAt<10000)return;
+  favLiveBusy=true; favLiveRefreshAt=now;
+  try{
+    const results=await Promise.all(favIds.map(async id=>{
+      try{
+        const j=await (await fetch("/api/item/"+encodeURIComponent(id)+"/live",{cache:"no-store"})).json();
+        return {id,j};
+      }catch{return {id,j:null}}
+    }));
+    for(const {id,j} of results){
+      if(!j?.ok)continue;
+      const r=rows.find(x=>x.id===id); if(!r)continue;
+      r.lots=Number(j.lotsCount||0);
+      r.min_price=j.minPrice??null;
+      r.minUnitPrice=j.minUnitPrice??j.minPrice??null;
+      r.minAmount=j.minAmount??null;
+      r.minTotalPrice=j.minTotalPrice??null;
+      r.max_price=j.maxPrice??null;
+      r.avg_price=j.avgPrice??null;
+      r.totalAmount=j.totalAmount??null;
+      r.ts=j.ts||r.ts;
+    }
+    renderFavs();
+  }finally{favLiveBusy=false}
+}
+
 function renderFavs(){
   const box=$("dashboard");
   if(!favIds.length){box.innerHTML=`<div class="fav-empty">Избранное пусто — нажми ★ на карточке лота</div>`;return}
@@ -932,9 +962,14 @@ async function openItem(id,silent){
       $("dBody").innerHTML=`<div class="empty">Загрузка...</div>`;
     }
     img.style.display="none";ph.style.display="flex";ph.textContent=(row.name||"?")[0];
-    img.onerror=()=>{img.style.display="none";ph.style.display="flex"};
-    img.onload=()=>{img.style.display="block";ph.style.display="none"};
-    img.src=iconUrl(id);
+    img.style.backgroundImage="none";
+    const iconSrc=iconUrl(id);
+    if(iconSrc){
+      const probe=new Image();
+      probe.onload=()=>{if(activeId===id){img.style.backgroundImage=`url("${iconSrc}")`;img.style.display="block";ph.style.display="none"}};
+      probe.onerror=()=>{if(activeId===id){img.style.backgroundImage="none";img.style.display="none";ph.style.display="flex"}};
+      probe.src=iconSrc;
+    }
   }
   let favBtn=$("drawerFavBtn");
   if(!favBtn){
@@ -1123,8 +1158,10 @@ async function openItem(id,silent){
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
-async function load(){try{const j=await(await fetch("/api/market")).json();rows=j.rows||[];renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();
-    if(rightTab==="catalog")renderCatalog();if(rightTab==="calc")renderCalc()}catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
+async function load(){try{const j=await(await fetch("/api/market",{cache:"no-store"})).json();rows=j.rows||[];renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();
+    if(rightTab==="catalog")renderCatalog();if(rightTab==="calc")renderCalc();
+    refreshFavoriteLots();
+  }catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
 async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
 $("q").oninput=()=>renderCards();
 $("huntQ").oninput=renderHunt;$("huntPrice").oninput=renderHunt;
