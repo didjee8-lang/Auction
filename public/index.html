@@ -338,12 +338,9 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <div class="row"><span>После комиссии 5% (если купить по аукциону и продать по моей)</span><b id="sumNet">—</b></div>
         </div>
         <div class="calc-sum calc-trade-sum">
-          <div class="section" style="margin-top:0">Трейд с игроком — без комиссии</div>
-          <div class="row"><span>Потратить на покупку по аукциону</span><b id="tradeBuy">—</b></div>
-          <div class="row"><span>Получить при продаже игроку</span><b id="tradeSell">—</b></div>
-          <div class="row"><span>Прибыль без комиссии</span><b id="tradeProfit">—</b></div>
-          <div class="row"><span>Доходность</span><b id="tradePct">—</b></div>
-        </div>
+      <div class="section" style="margin-top:0">Трейд с игроком — каждый предмет отдельно</div>
+      <div id="tradeRows"></div>
+    </div>
       </div>
     </div>
   </div>
@@ -898,52 +895,59 @@ function recalcCalc(){
   }
   const diff=hasMy&&hasAuc?sumMy-sumAuc:null;
   const sellNet=hasMy&&hasAuc?Math.round(sumMy*0.95-sumAuc):null;
-  // Трейд считается отдельно для каждого предмета, без объединения всех строк.
-    const tradeRows = $("tradeRows");
-    if (tradeRows) {
-      tradeRows.innerHTML = "";
-      for (const id of calcIds) {
-        const r = rows.find(x => x.id === id);
-        const rawPrice = calcNum(calcPrices[id]);
-        const qty = calcNum(calcQty[id]);
-        const validQty = Number.isFinite(qty) && qty > 0;
+  const tradeRows=$("tradeRows");
+    if(tradeRows){
+      tradeRows.innerHTML="";
+      for(const id of calcIds){
+        const r=rows.find(x=>x.id===id);
+        const rawPrice=calcNum(calcPrices[id]);
+        const qty=calcNum(calcQty[id]);
+        const validQty=Number.isFinite(qty)&&qty>0;
+        let sellTotal=NaN;
 
-        let myTotal = NaN;
-        if (calcMode === "buy") {
-          if (validQty && Number.isFinite(rawPrice)) myTotal = rawPrice;
-        } else {
-          if (validQty && Number.isFinite(rawPrice)) myTotal = rawPrice * qty;
+        if(calcMode==="buy"){
+          if(validQty&&Number.isFinite(rawPrice)) sellTotal=rawPrice;
+        }else{
+          if(validQty&&Number.isFinite(rawPrice)) sellTotal=rawPrice*qty;
         }
 
-        const auctionTotal =
-          r && r.min_price != null && validQty
-            ? Number(r.min_price) * qty
-            : NaN;
+        const buyTotal=(r&&r.min_price!=null&&validQty&&Number.isFinite(Number(r.min_price)))
+          ? Number(r.min_price)*qty : NaN;
+        const profit=Number.isFinite(sellTotal)&&Number.isFinite(buyTotal)
+          ? sellTotal-buyTotal : NaN;
+        const pct=Number.isFinite(profit)&&buyTotal>0
+          ? profit/buyTotal*100 : NaN;
+        const name=r?(r.name||r.title||r.item_name||id):id;
 
-        const profit =
-          Number.isFinite(myTotal) && Number.isFinite(auctionTotal)
-            ? myTotal - auctionTotal
-            : NaN;
-
-        const pct =
-          Number.isFinite(profit) && Number.isFinite(auctionTotal) && auctionTotal > 0
-            ? (profit / auctionTotal) * 100
-            : NaN;
-
-        const name = r ? (r.name || r.title || r.item_name || id) : id;
-        const box = document.createElement("div");
-        box.className = "trade-item";
-        box.style.cssText = "padding:10px 0;border-top:1px solid var(--line);margin-top:8px";
-        box.innerHTML = `
-          <div style="font-weight:700;margin-bottom:6px">${name}</div>
-          <div class="row"><span>Покупка по аукциону</span><b>${Number.isFinite(auctionTotal) ? fmt(auctionTotal) : "—"}</b></div>
-          <div class="row"><span>Продажа игроку</span><b>${Number.isFinite(myTotal) ? fmt(myTotal) : "—"}</b></div>
-          <div class="row"><span>Прибыль без комиссии</span><b class="${Number.isFinite(profit) ? (profit >= 0 ? "g" : "r") : ""}">${Number.isFinite(profit) ? (profit > 0 ? "+" : "") + fmt(profit) : "—"}</b></div>
-          <div class="row"><span>Доходность</span><b class="${Number.isFinite(pct) ? (pct >= 0 ? "g" : "r") : ""}">${Number.isFinite(pct) ? (pct > 0 ? "+" : "") + pct.toFixed(1) + "%" : "—"}</b></div>
-        `;
+        const box=document.createElement("div");
+        box.className="trade-item";
+        box.style.cssText="padding:10px 0;border-top:1px solid var(--line);margin-top:8px";
+        box.innerHTML=`<div style="font-weight:700;margin-bottom:6px">${name}</div>
+          <div class="row"><span>Покупка по аукциону</span><b>${Number.isFinite(buyTotal)?fmt(buyTotal):"—"}</b></div>
+          <div class="row"><span>Продажа игроку</span><b>${Number.isFinite(sellTotal)?fmt(sellTotal):"—"}</b></div>
+          <div class="row"><span>Прибыль без комиссии</span><b class="${Number.isFinite(profit)?(profit>=0?"g":"r"):""}">${Number.isFinite(profit)?(profit>0?"+":"")+fmt(profit):"—"}</b></div>
+          <div class="row"><span>Доходность</span><b class="${Number.isFinite(pct)?(pct>=0?"g":"r"):""}">${Number.isFinite(pct)?(pct>0?"+":"")+pct.toFixed(1)+"%":"—"}</b></div>`;
         tradeRows.appendChild(box);
       }
     }
+}
+function updateCalcMode(){
+  const buy=calcMode==="buy";
+  $("calcBuyMode").classList.toggle("active",buy);$("calcSellMode").classList.toggle("active",!buy);
+  $("calcModeHint").textContent=buy?"Ввод: количество → цена всего → цена за 1 шт.":"Ввод: цена за 1 шт. → количество → сумма";
+  $("calcHead").innerHTML=buy
+    ? '<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Моя цена / шт.</th><th>Аукцион / шт.</th><th>Разница</th><th></th>'
+    : '<th>Предмет</th><th>Моя цена / шт.</th><th>Количество</th><th>Моя сумма</th><th>Аукцион / шт.</th><th>Разница</th><th></th>';
+}
+function renderCalc(){
+  const focused=document.activeElement;
+  const restore=focused&&focused.matches?.('#calcBody input[data-qty-id],#calcBody input[data-price-id]')
+    ? {kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,start:focused.selectionStart,end:focused.selectionEnd,scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;
+  updateCalcMode();
+  if(!calcIds.length){
+    $("calcBody").innerHTML=`<tr><td colspan="7" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
+    recalcCalc();
+    return;
   }
   $("calcBody").innerHTML=calcIds.map(id=>{
     const r=rows.find(x=>x.id===id)||{id,name:id};
