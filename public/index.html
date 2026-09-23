@@ -27,9 +27,11 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .btn:disabled{opacity:.5}
 .status{color:var(--muted);font-size:12px;margin-left:auto}
 .status b{color:var(--neon2)}
-.dashboard{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);flex-shrink:0;overflow:visible;min-height:72px;max-height:160px;overflow-y:auto}
+.dashboard{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);flex-shrink:0;overflow:visible;min-height:72px;max-height:none;height:auto}
 .dashboard .fav-empty{color:var(--muted);font-size:12px;padding:12px 8px;align-self:center;white-space:nowrap}
 .fav-card{flex:0 0 auto;width:148px;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:6px 8px;cursor:pointer;display:flex;flex-direction:column;gap:2px;position:relative;transition:border-color .15s,box-shadow .15s}
+.fav-card .fav-qlt{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-top:1px}
+.pcard .pcard-qlt{font-size:10px;font-weight:700;margin-bottom:4px}
 .fav-card:hover{border-color:var(--neon);box-shadow:0 0 12px var(--glow)}
 .fav-card.active{border-color:var(--neon2);box-shadow:0 0 0 1px var(--neon-dim),0 0 14px var(--glow-strong)}
 .fav-card.cheap{border:2px solid rgba(74,222,128,.7);box-shadow:0 0 8px rgba(74,222,128,.2)}
@@ -239,7 +241,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   .hunt #huntQ{max-width:none;min-width:0;flex:1 1 100%}
   .hunt #huntPrice{width:100px}
   .hunt-results{width:100%;flex:1 1 100%}
-  .dashboard{max-height:120px;padding:6px 10px}
+  .dashboard{max-height:none;padding:6px 10px}
   .fav-card{width:132px}
   .filter-bar{padding:5px 10px}
   .pane-head{padding:8px 10px}
@@ -553,18 +555,19 @@ function renderFavs(){
     const listed=(r.lots||0)>0;
     const cls=["fav-card",id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
     const unit=listed?(r.minUnitPrice!=null?r.minUnitPrice:r.min_price):null;
-    // If there are no active lots, show the latest completed sale instead of
-    // the misleading "не выставлен" price. Once a real active lot appears,
-    // the live auction price always takes priority.
     const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
     const price=listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"нет данных");
     const lotsTxt=listed?`${fmtN(r.lots)} лот.`:(fallbackSale!=null?"нет активных лотов · последняя продажа":"нет активных лотов");
-    return`<div class="${cls}" data-id="${esc(id)}">
+    const qltCol=r.qltColor||null;
+    const qltTxt=r.qltShort||r.qltLabel||"";
+    const nameCol=qltCol||(tier?tier.color:"var(--text)");
+    return`<div class="${cls}" data-id="${esc(id)}" style="${qltCol?`border-color:${qltCol}55`:""}">
       <button class="fav-star" data-fav-rm="${esc(id)}" title="Убрать из избранного">★</button>
       <div class="fav-top">
         <div class="fav-icon">${iconHtml(id,r.name)}</div>
-        <div class="fav-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||id)}</div>
+        <div class="fav-name" style="color:${nameCol}">${esc(r.name||id)}</div>
       </div>
+      ${qltTxt?`<div class="fav-qlt" style="color:${qltCol||"var(--muted)"}">${esc(qltTxt)}</div>`:""}
       <div class="fav-price" style="color:${listed?"var(--neon2)":"var(--muted)"}">${price}${listed?' <span style="font-size:9px;color:var(--muted)">/шт</span>':''}</div>
       <div class="fav-meta"><span style="color:${listed?"var(--green)":"var(--red)"}">${lotsTxt}</span>${r.profit!=null&&listed?`<span style="color:${r.profit>=0?"var(--green)":"var(--red)"}">${r.profit>=0?"+":""}${fmt(r.profit)}</span>`:""}</div>
     </div>`;
@@ -752,7 +755,8 @@ function statusBadge(row){
   if(row.lots>0)return`<span class="badge p">В продаже</span>`;
   return`<span class="badge m">Нет лотов</span>`;
 }
-function iconUrl(id){return id?`/api/icon/${encodeURIComponent(id)}`:""}
+function baseItemId(id){return String(id||"").replace(/@q\d+$/,"")}
+function iconUrl(id){const b=baseItemId(id);return b?`/api/icon/${encodeURIComponent(b)}`:""}
 function iconHtml(id,name){
   return `<img src="${iconUrl(id)}" alt="" loading="lazy" decoding="async"
     onerror="this.style.visibility='hidden'"
@@ -812,8 +816,8 @@ function renderCards(){
       <button class="pcard-excl" data-excl="${esc(r.id)}" title="В исключения">−</button>
       <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
       <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
-      <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
-      <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}</div>
+      <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(r.name||r.id)}</div>
+      <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}</div>
       <div class="pcard-price">${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span></div>
       <div class="pcard-qty"><b>${fmtN(r.lots)} лот.</b></div>
       ${profitLine}

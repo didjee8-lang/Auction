@@ -227,7 +227,26 @@ function parseHistory(j){
   }).filter(x=>x.price>0);
 }
 const QLT_LABELS={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
+const QLT_SHORT={0:"серый",1:"зелён",2:"синий",3:"фиол",4:"красн",5:"желт",6:"уникал"};
+const QLT_COLOR={0:"#9ca3af",1:"#4ade80",2:"#60a5fa",3:"#c084fc",4:"#f87171",5:"#fbbf24",6:"#ff2a2a"};
 function qltLabel(q){return q!=null && QLT_LABELS[q]!=null?QLT_LABELS[q]:null;}
+function qltShort(q){return q!=null && QLT_SHORT[q]!=null?QLT_SHORT[q]:null;}
+/** Parse virtual id "5logg@q2" → {baseId, qlt} */
+function parseVariantId(raw){
+  const s=String(raw||"");
+  const m=s.match(/^(.*)@q(\d+)$/);
+  if(m) return {baseId:m[1], qlt:Number(m[2]), variantId:s};
+  return {baseId:s, qlt:null, variantId:s};
+}
+function variantDisplayName(baseName, qlt){
+  const short=qltShort(qlt);
+  if(short==null) return baseName;
+  // Compact name for strange artifact family
+  let base=baseName||"";
+  if(/странн(ый)?\s*арт/i.test(base) || /strange\s*artifact/i.test(base)) base="Стран Арт";
+  return `${base} · ${short}`;
+}
+
 
 
 
@@ -584,13 +603,124 @@ function buildMarketRow(x){
   };
 }
 
+function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
+  // Build a market row as if only this qlt existed
+  const fakeLots=lotRowsForQlt;
+  const minLot=fakeLots[0]||null;
+  const minP=minLot?.price??null;
+  const minPtn=minLot?.ptn??null;
+  const lotPrices=fakeLots.map(l=>l.price).filter(p=>p>0);
+  const lotAvg=lotPrices.length?avgOf(lotPrices):null;
+  const sameLots=fakeLots.filter(l=>l.ptn===minPtn).map(l=>l.price).filter(p=>p>0);
+
+  let saleGroup=[];
+  try {
+    saleGroup=DB.prepare(`
+      SELECT price, amount, ts FROM sale_observations
+      WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) AND price>0
+      ORDER BY datetime(ts) DESC LIMIT 20
+    `).all(baseItem.id, qlt, qlt);
+  } catch { saleGroup=[]; }
+  const salePrices=weightedPrices(saleGroup);
+
+  let ref=null, refSource="none", refCount=0, dataOk=false;
+  if(salePrices.length>=3){
+    ref=medianOf(salePrices); refSource="recent_sales_20"; refCount=saleGroup.length; dataOk=true;
+  } else if(sameLots.length>=3){
+    ref=medianOf(sameLots); refSource="lots_qlt"; refCount=sameLots.length; dataOk=true;
+  } else if(sameLots.length>=1){
+    ref=medianOf(sameLots); refSource="lots_qlt"; refCount=sameLots.length; dataOk=false;
+  } else if(salePrices.length>=1){
+    ref=medianOf(salePrices); refSource="sales_qlt"; refCount=saleGroup.length; dataOk=false;
+  }
+
+  let status="no_data", statusLabel="Мало данных";
+  if(minP && ref && dataOk){
+    const ratio=minP/ref;
+    if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
+    else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
+    else { status="normal"; statusLabel="Обычная"; }
+  } else if(minP && ref && !dataOk){
+    const ratio=minP/ref;
+    if(ratio<=0.85){ status="cheap"; statusLabel="Ниже рынка"; }
+    else if(ratio>=1.20){ status="expensive"; statusLabel="Выше рынка"; }
+    else { status="has_lots"; statusLabel="В продаже"; }
+  } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
+
+  const profit=(minP!=null && ref!=null)?Math.round(ref*0.95 - minP):null;
+  const profitPct=(minP && ref && minP>0)?Math.round(((ref*0.95 - minP)/minP)*1000)/10:null;
+  const lastSaleRow=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY ts DESC LIMIT 1").get(baseItem.id, qlt, qlt);
+  const lastSale=lastSaleRow?.price??null;
+  const sa=salesAverages(baseItem.id);
+  const totalAmount=fakeLots.reduce((s,l)=>s+(Number(l.amount)||0),0);
+  const variantId=`${baseItem.id}@q${qlt}`;
+  const dispName=variantDisplayName(baseItem.name, qlt);
+
+  return {
+    ...baseItem,
+    id: variantId,
+    baseId: baseItem.id,
+    name: dispName,
+    variantQlt: qlt,
+    min_price: minP,
+    avg_price: lotAvg,
+    max_price: lotPrices.length?lotPrices[lotPrices.length-1]:null,
+    lots: fakeLots.length,
+    totalAmount: totalAmount>0?totalAmount:null,
+    minAmount: minLot?.amount??null,
+    minTotalPrice: minLot?.price!=null && minLot?.amount!=null ? Math.round(minLot.price*minLot.amount) : null,
+    minUnitPrice: minLot?.price??minP,
+    minQlt: qlt,
+    minPtn,
+    qltLabel: qltLabel(qlt),
+    qltShort: qltShort(qlt),
+    qltColor: QLT_COLOR[qlt]||null,
+    histMedian: ref,
+    histSource: refSource,
+    histCount: refCount,
+    dataOk,
+    avgAll: sa.avgAll, avg7d: sa.avg7d, avgToday: sa.avgToday, avgYesterday: sa.avgYesterday,
+    salesCount: sa.salesCount, sales7d: sa.sales7d, salesToday: sa.salesToday, salesYesterday: sa.salesYesterday,
+    soldPerDay: sa.sales7d!=null ? Math.round((sa.sales7d/7)*10)/10 : 0,
+    lastSale,
+    changeVsLast: (minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null,
+    status, statusLabel, profit, profitPct,
+    ts: new Date().toISOString(),
+    isVariant: true
+  };
+}
+
 function getMarketRows(force=false){
   const now=Date.now();
   if(!force && marketCache.rows && (now-marketCache.at)<MARKET_CACHE_MS){
     return {updated:marketCache.updated||lastScan, rows:marketCache.rows};
   }
   const items=DB.prepare("SELECT * FROM items ORDER BY name").all();
-  const rows=items.map(buildMarketRow);
+  const getLots=DB.prepare(`SELECT price, amount, qlt, ptn FROM lots WHERE item_id=? ORDER BY price ASC`);
+  const rows=[];
+  for(const x of items){
+    const lotRows=getLots.all(x.id);
+    // Group by qlt (null → treat as 0 for grouping display if any qlt present)
+    const byQlt=new Map();
+    for(const l of lotRows){
+      const q=l.qlt!=null?Number(l.qlt):null;
+      if(q==null) continue;
+      if(!byQlt.has(q)) byQlt.set(q, []);
+      byQlt.get(q).push(l);
+    }
+    const expand = byQlt.size>=2 || (x.id==="5logg" && byQlt.size>=1) || /странн(ый)?\s*арт/i.test(x.name||"");
+    if(expand && byQlt.size>=1){
+      // One card per rarity that has lots
+      for(const q of [...byQlt.keys()].sort((a,b)=>a-b)){
+        rows.push(buildVariantRow(x, q, byQlt.get(q), lotRows));
+      }
+      // Also keep base row if there are lots without qlt
+      const noQlt=lotRows.filter(l=>l.qlt==null);
+      if(noQlt.length) rows.push(buildMarketRow(x));
+    } else {
+      rows.push(buildMarketRow(x));
+    }
+  }
   marketCache={at:now, rows, updated:lastScan};
   return {updated:lastScan, rows};
 }
@@ -654,43 +784,61 @@ app.post("/api/priority",(req,res)=>{
 });
 
 app.get("/api/item/:id",async(req,res)=>{
-  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(req.params.id);
+  const {baseId, qlt}=parseVariantId(req.params.id);
+  const item=DB.prepare("SELECT * FROM items WHERE id=?").get(baseId);
   if(!item)return res.status(404).json({error:"item not found"});
+  if(qlt!=null){
+    item.name=variantDisplayName(item.name, qlt);
+    item.variantQlt=qlt;
+    item.qltShort=qltShort(qlt);
+    item.qltColor=QLT_COLOR[qlt];
+  }
   // Opening an item performs a live refresh of active lots, so a purchased
   // lot disappears immediately instead of waiting for the background scanner.
   let lots=[];
   try{
-    lots=await fetchAllLots(item.id);
-    saveLots(item.id,lots,new Date().toISOString());
+    lots=await fetchAllLots(baseId);
+    saveLots(baseId,lots,new Date().toISOString());
   }catch{
-    lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(item.id);
+    lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(baseId);
   }
+  if(qlt!=null) lots=lots.filter(l=>Number(l.qlt)===qlt);
 
-  const observations=DB.prepare("SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 2000").all(item.id).reverse();
+  const observations=DB.prepare("SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 2000").all(baseId).reverse();
   // Persistent history: save fresh sales, then always read the displayed history
   // from SQLite. A temporary empty API response never erases saved sales.
   try{
-    const j=await api(`/auction/${encodeURIComponent(item.id)}/history?limit=200&additional=true`);
+    const j=await api(`/auction/${encodeURIComponent(baseId)}/history?limit=200&additional=true`);
     const fresh=parseHistory(j)
       .filter(x=>x && x.price>0)
       .map(x=>({...x,ts:x.ts||new Date().toISOString(),raw:x.raw||JSON.stringify(x)}));
     if(fresh.length){
       const ins=DB.prepare(`INSERT OR REPLACE INTO sale_observations(item_id,sale_id,ts,price,amount,raw,qlt,ptn) VALUES(?,?,?,?,?,?,?,?)`);
       const tx=DB.transaction(a=>{
-        for(const x of a)ins.run(item.id,x.id,x.ts,x.price,x.amount,x.raw,x.qlt,x.ptn);
+        for(const x of a)ins.run(baseId,x.id,x.ts,x.price,x.amount,x.raw,x.qlt,x.ptn);
       });
       tx(fresh);
     }
   }catch{}
 
-  let history=DB.prepare(
-    `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
-     FROM sale_observations
-     WHERE item_id=? AND price>0
-     ORDER BY datetime(ts) DESC LIMIT 500`
-  ).all(item.id);
+  let history;
+  if(qlt!=null){
+    history=DB.prepare(
+      `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
+       FROM sale_observations
+       WHERE item_id=? AND price>0 AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+       ORDER BY datetime(ts) DESC LIMIT 500`
+    ).all(baseId, qlt, qlt);
+  } else {
+    history=DB.prepare(
+      `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
+       FROM sale_observations
+       WHERE item_id=? AND price>0
+       ORDER BY datetime(ts) DESC LIMIT 500`
+    ).all(baseId);
+  }
 
-  const sa=salesAverages(item.id);
+  const sa=salesAverages(baseId);
   const salePrices=history.map(h=>h.price).filter(p=>p>0);
   const lastSale=history.find(h=>h.price>0)?.price??null;
   const curMin=lots.length?Math.min(...lots.map(l=>l.price)):null;
@@ -714,42 +862,57 @@ const ICONS_DIR = path.join(__dirname, "public", "icons");
 fs.mkdirSync(ICONS_DIR, { recursive: true });
 
 app.get("/api/item/:id/live",async(req,res)=>{
-  const id=String(req.params.id);
-  liveBusy.add(id);
+  const {baseId, qlt, variantId}=parseVariantId(req.params.id);
+  liveBusy.add(baseId);
   try{
-    const lots=await fetchAllLots(id);
-    saveLots(id,lots,new Date().toISOString());
-    res.json({ok:true,id,lots:lots.map(x=>({...x,totalPrice:Math.round(x.price*x.amount),qlt:x.qlt,ptn:x.ptn,created_at:x.created})),lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,ts:new Date().toISOString()});
+    let lots=await fetchAllLots(baseId);
+    saveLots(baseId,lots,new Date().toISOString());
+    if(qlt!=null) lots=lots.filter(l=>Number(l.qlt)===qlt).sort((a,b)=>(a.price||0)-(b.price||0));
+    res.json({ok:true,id:variantId,baseId,variantQlt:qlt,lots:lots.map(x=>({...x,totalPrice:Math.round(x.price*x.amount),qlt:x.qlt,ptn:x.ptn,created_at:x.created})),lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,ts:new Date().toISOString()});
   }catch(e){
-    const cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(id);
-    res.json({ok:false,id,lots:cached.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,error:e.message});
+    let cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(baseId);
+    if(qlt!=null) cached=cached.filter(l=>Number(l.qlt)===qlt);
+    res.json({ok:false,id:variantId,baseId,variantQlt:qlt,lots:cached.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,error:e.message});
   }finally{
-    setTimeout(()=>liveBusy.delete(id), 2000);
+    setTimeout(()=>liveBusy.delete(baseId), 2000);
   }
 });
 
 app.get("/api/favorites/live",async(req,res)=>{
   const ids=String(req.query.ids||"").split(",").map(x=>decodeURIComponent(x)).filter(Boolean).slice(0,100);
   const rows=[];
-  for(const id of ids){
+  for(const rawId of ids){
+    const {baseId, qlt, variantId}=parseVariantId(rawId);
     try{
-      const lots=await fetchAllLots(id);
-      saveLots(id,lots,new Date().toISOString());
-      const item=DB.prepare("SELECT * FROM items WHERE id=?").get(id)||{id,name:id};
-      const last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(id);
-      rows.push({ok:true,id,name:item.name,lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,lastSale:last?.price??null,ts:new Date().toISOString()});
+      const lotsAll=await fetchAllLots(baseId);
+      saveLots(baseId,lotsAll,new Date().toISOString());
+      let lots=lotsAll;
+      if(qlt!=null) lots=lotsAll.filter(l=>Number(l.qlt)===qlt).sort((a,b)=>(a.price||0)-(b.price||0));
+      const item=DB.prepare("SELECT * FROM items WHERE id=?").get(baseId)||{id:baseId,name:baseId};
+      const name=qlt!=null?variantDisplayName(item.name,qlt):item.name;
+      let last;
+      if(qlt!=null){
+        last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY datetime(ts) DESC LIMIT 1").get(baseId,qlt,qlt);
+      } else {
+        last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(baseId);
+      }
+      rows.push({ok:true,id:variantId,baseId,name,variantQlt:qlt,qltShort:qltShort(qlt),qltColor:qlt!=null?QLT_COLOR[qlt]:null,lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,lastSale:last?.price??null,ts:new Date().toISOString()});
     }catch(e){
-      const item=DB.prepare("SELECT * FROM items WHERE id=?").get(id)||{id,name:id};
-      const cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(id);
-      const last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(id);
-      rows.push({ok:false,id,name:item.name,lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,lastSale:last?.price??null,error:e.message});
+      const item=DB.prepare("SELECT * FROM items WHERE id=?").get(baseId)||{id:baseId,name:baseId};
+      let cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(baseId);
+      if(qlt!=null) cached=cached.filter(l=>Number(l.qlt)===qlt);
+      const name=qlt!=null?variantDisplayName(item.name,qlt):item.name;
+      const last=qlt!=null
+        ? DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY datetime(ts) DESC LIMIT 1").get(baseId,qlt,qlt)
+        : DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(baseId);
+      rows.push({ok:false,id:variantId,baseId,name,variantQlt:qlt,lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,lastSale:last?.price??null,error:e.message});
     }
   }
   res.json({rows});
 });
 
 app.get("/api/icon/:id", async (req, res) => {
-  const id = String(req.params.id || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  const id = String(req.params.id || "").replace(/@q\d+$/,"").replace(/[^a-zA-Z0-9_-]/g, "");
   if (!id) return res.status(400).end();
   const local = path.join(ICONS_DIR, `${id}.png`);
   if (fs.existsSync(local) && fs.statSync(local).size > 50) {
