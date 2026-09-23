@@ -391,6 +391,8 @@ let calcBuyPrices=JSON.parse(localStorage.getItem("sz_calc_buy_prices")||"{}");
 let calcBuyQty=JSON.parse(localStorage.getItem("sz_calc_buy_qty")||"{}");
 let calcSellPrices=JSON.parse(localStorage.getItem("sz_calc_sell_prices")||"{}");
 let calcSellQty=JSON.parse(localStorage.getItem("sz_calc_sell_qty")||"{}");
+let calcTotalSellPrices=JSON.parse(localStorage.getItem("sz_calc_total_sell_prices")||"{}");
+let calcTotalSellQty=JSON.parse(localStorage.getItem("sz_calc_total_sell_qty")||"{}");
 let favIds=JSON.parse(localStorage.getItem("sz_favs")||"[]");
 let excludeIds=JSON.parse(localStorage.getItem("sz_excl")||"[]");
 let selectedCats=JSON.parse(localStorage.getItem("sz_cats")||"[]");
@@ -569,43 +571,6 @@ function renderFavs(){
   }).join("");
   box.querySelectorAll(".fav-card").forEach(el=>{
     el.onclick=e=>{if(e.target.closest("[data-fav-rm]"))return;openItem(el.dataset.id)};
-    let tipTimer=null, tipEl=null;
-    el.onmouseenter=()=>{
-      tipTimer=setTimeout(()=>{
-        const id=el.dataset.id;
-        const r=rows.find(x=>x.id===id);
-        if(!r)return;
-        const listed=(r.lots||0)>0;
-        const unit=listed?(r.minUnitPrice??r.min_price):null;
-        const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
-        const deal=r.status==="cheap";
-        document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
-        tipEl=document.createElement("div");
-        tipEl.className="fav-tip show";
-        tipEl.innerHTML=`<div class="ft-title">${esc(r.name||id)}</div>
-          <div class="ft-row"><span>Статус</span><b class="${listed?"ft-deal":""}">${listed?"в продаже":"не выставлен"}</b></div>
-          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"—")}</b></div>
-          <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):(fallbackSale!=null?"0 · последняя продажа":"0")}</b></div>
-          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
-          ${deal?`<div class="ft-row ft-deal">Выгоднее рынка</div>`:""}`;
-        document.body.appendChild(tipEl);
-        const rect=el.getBoundingClientRect();
-        let left=rect.left;
-        let top=rect.bottom+6;
-        const tw=tipEl.offsetWidth, th=tipEl.offsetHeight;
-        if(left+tw>window.innerWidth-8)left=window.innerWidth-tw-8;
-        if(left<8)left=8;
-        if(top+th>window.innerHeight-8)top=rect.top-th-6;
-        if(top<8)top=8;
-        tipEl.style.left=left+"px";
-        tipEl.style.top=top+"px";
-      },600);
-    };
-    el.onmouseleave=()=>{
-      if(tipTimer){clearTimeout(tipTimer);tipTimer=null}
-      if(tipEl){tipEl.remove();tipEl=null}
-      document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
-    };
   });
   box.querySelectorAll("[data-fav-rm]").forEach(btn=>{
     btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.favRm)};
@@ -783,7 +748,7 @@ function renderCards(){
   if(selectedCats.length)list=list.filter(r=>selectedCats.includes(itemCat(r)));
   if(filter==="cheap")list=list.filter(r=>r.status==="cheap");
   else if(filter==="expensive")list=list.filter(r=>r.status==="expensive");
-  else if(filter==="liquid")list=list.filter(r=>(r.soldPerDay||0)>=1);
+  else if(filter==="liquid")list=list.filter(r=>(r.sales7d||0)>=3||(r.salesToday||0)>=1);
   else if(filter==="nodata")list=list.filter(r=>!r.dataOk);
   if(q)list=fuzzyFilter(list,q);
   if(sortBy==="profit"){
@@ -926,15 +891,85 @@ function recalcCalc(){
 }
 function updateCalcMode(){const buy=calcMode==="buy",sell=calcMode==="sell",total=calcMode==="totalSell";$("calcBuyMode").classList.toggle('active',buy);$("calcSellMode").classList.toggle('active',sell);$("calcTotalSellMode").classList.toggle('active',total);$("calcModeHint").textContent=buy?'Покупка: общая цена ÷ количество':sell?'Продажа: цена за 1 шт. × количество':'Общ. продажа: общая цена ÷ количество, аукцион −5%';$("calcHead").innerHTML=buy?'<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>':sell?'<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>':'<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';$("calcBuySummary").style.display=buy?'block':'none';$("calcSellSummary").style.display=buy?'none':'block'}
 function renderCalc(){
-  // Save current DOM values before any redraw (including automatic auction refresh).
+  // Always persist current DOM values first (separate stores per mode).
   persistVisibleCalcInputs();
-  const focused=document.activeElement;const restore=focused&&focused.matches?.('#calcBody input[data-qty-id],#calcBody input[data-price-id]')?{kind:focused.dataset.qtyId?'qty':'price',id:focused.dataset.qtyId||focused.dataset.priceId,start:focused.selectionStart,end:focused.selectionEnd,scroll:document.querySelector('#calcPane .scroll')?.scrollTop||0}:null;updateCalcMode();const state=calcState();
-  if(!calcIds.length){$("calcBody").innerHTML=`<tr><td colspan="${calcMode==='buy'?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;$("calcDetails").innerHTML='';recalcCalc();return}
-  $("calcBody").innerHTML=calcIds.map(id=>{const r=rows.find(x=>x.id===id)||{id,name:id},price=state.prices[id]??'',qty=state.qty[id]??'';if(calcMode==='buy')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td><td class="calc-unit">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`}).join('');
-  $("calcBody").querySelectorAll('input[data-price-id]').forEach(inp=>inp.oninput=()=>{const id=inp.dataset.priceId,state=calcState(),raw=inp.value.replace(/[^0-9.,]/g,'');if(raw!==inp.value)inp.value=raw;if(!raw.trim())delete state.prices[id];else state.prices[id]=raw;saveCalc();recalcCalc()});
-  $("calcBody").querySelectorAll('input[data-qty-id]').forEach(inp=>{inp.oninput=()=>{const id=inp.dataset.qtyId,state=calcState(),raw=inp.value.replace(/[^0-9]/g,'');if(raw!==inp.value)inp.value=raw;if(!raw.trim())delete state.qty[id];else state.qty[id]=raw;saveCalc();recalcCalc()};inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();const x=inp.closest('tr')?.querySelector('input[data-price-id]');if(x){x.focus();x.select()}}}});
-  $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{calcIds=calcIds.filter(x=>x!==btn.dataset.id);delete calcBuyPrices[btn.dataset.id];delete calcBuyQty[btn.dataset.id];delete calcSellPrices[btn.dataset.id];delete calcSellQty[btn.dataset.id];delete calcTotalSellPrices[btn.dataset.id];delete calcTotalSellQty[btn.dataset.id];saveCalc();renderCalc()});recalcCalc();
-  if(restore)requestAnimationFrame(()=>{const attr=restore.kind==='qty'?'data-qty-id':'data-price-id',el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);if(el){el.focus({preventScroll:true});try{el.setSelectionRange(restore.start,restore.end)}catch{}const sc=document.querySelector('#calcPane .scroll');if(sc)sc.scrollTop=restore.scroll}})
+  const focused=document.activeElement;
+  const isFocused=focused&&focused.matches&&focused.matches('#calcBody input[data-qty-id],#calcBody input[data-price-id]');
+  const restore=isFocused?{
+    kind:focused.dataset.qtyId?'qty':'price',
+    id:focused.dataset.qtyId||focused.dataset.priceId,
+    start:focused.selectionStart,
+    end:focused.selectionEnd,
+    scroll:document.querySelector('#calcPane')?.closest?.('.scroll')?.scrollTop
+      ?? document.querySelector('.pane .scroll')?.scrollTop
+      ?? 0
+  }:null;
+
+  // If user is typing and the table already has the same set of rows for this mode, only recalculate.
+  if(isFocused){
+    const existing=Array.from(document.querySelectorAll('#calcBody tr[data-calc-id]')).map(tr=>tr.dataset.calcId);
+    const same=existing.length===calcIds.length && calcIds.every((id,i)=>existing[i]===id);
+    if(same){
+      updateCalcMode();
+      recalcCalc();
+      return;
+    }
+  }
+
+  updateCalcMode();
+  const state=calcState();
+  if(!calcIds.length){
+    $("calcBody").innerHTML=`<tr><td colspan="${calcMode==='buy'?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
+    $("calcDetails").innerHTML='';
+    recalcCalc();
+    return;
+  }
+  $("calcBody").innerHTML=calcIds.map(id=>{
+    const r=rows.find(x=>x.id===id)||{id,name:id};
+    const price=state.prices[id]??'';
+    const qty=state.qty[id]??'';
+    if(calcMode==='buy')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td><td class="calc-unit">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
+    if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
+    return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
+  }).join('');
+  $("calcBody").querySelectorAll('input[data-price-id]').forEach(inp=>inp.oninput=()=>{
+    const id=inp.dataset.priceId,state=calcState(),raw=inp.value.replace(/[^0-9.,]/g,'');
+    if(raw!==inp.value)inp.value=raw;
+    if(!raw.trim())delete state.prices[id]; else state.prices[id]=raw;
+    saveCalc();recalcCalc();
+  });
+  $("calcBody").querySelectorAll('input[data-qty-id]').forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.qtyId,state=calcState(),raw=inp.value.replace(/[^0-9]/g,'');
+      if(raw!==inp.value)inp.value=raw;
+      if(!raw.trim())delete state.qty[id]; else state.qty[id]=raw;
+      saveCalc();recalcCalc();
+    };
+    inp.onkeydown=e=>{
+      if(e.key==='Enter'){
+        e.preventDefault();
+        const x=inp.closest('tr')?.querySelector('input[data-price-id]');
+        if(x){x.focus();x.select()}
+      }
+    };
+  });
+  $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{
+    const rid=btn.dataset.id;
+    calcIds=calcIds.filter(x=>x!==rid);
+    delete calcBuyPrices[rid];delete calcBuyQty[rid];
+    delete calcSellPrices[rid];delete calcSellQty[rid];
+    delete calcTotalSellPrices[rid];delete calcTotalSellQty[rid];
+    saveCalc();renderCalc();
+  });
+  recalcCalc();
+  if(restore)requestAnimationFrame(()=>{
+    const attr=restore.kind==='qty'?'data-qty-id':'data-price-id';
+    const el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);
+    if(el){
+      el.focus({preventScroll:true});
+      try{el.setSelectionRange(restore.start,restore.end)}catch{}
+    }
+  });
 }
 window.addEventListener("pagehide",persistVisibleCalcInputs);
 window.addEventListener("beforeunload",persistVisibleCalcInputs);
@@ -1254,9 +1289,32 @@ async function openItem(id,silent){
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
-async function load(){try{const j=await(await fetch("/api/market",{cache:"no-store"})).json();rows=j.rows||[];renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();
-    if(rightTab==="catalog")renderCatalog();if(rightTab==="calc")renderCalc();
+function isCalcInputFocused(){
+  const el=document.activeElement;
+  return !!(el&&el.matches&&el.matches('#calcBody input[data-qty-id],#calcBody input[data-price-id],#calcQ,#scPrice,#scQty,#lotPriceFilter,#huntQ,#huntPrice,#q,#catQ'));
+}
+async function load(){try{
+    const j=await(await fetch("/api/market",{cache:"no-store"})).json();
+    rows=j.rows||[];
+    const scrollState=saveScrollState();
+    const keepCalc=rightTab==="calc"&&isCalcInputFocused();
+    if(keepCalc)persistVisibleCalcInputs();
+    renderCatChips();renderTplBar();
+    if(!isCalcInputFocused()||rightTab!=="calc"){
+      // avoid layout thrash while typing in calculator
+    }
+    renderCards();renderFavs();renderHunt();
+    if(rightTab==="catalog")renderCatalog();
+    if(rightTab==="calc"){
+      if(keepCalc){
+        // only update summary numbers, do not rebuild inputs
+        recalcCalc();
+      }else{
+        renderCalc();
+      }
+    }
     refreshFavoriteLots();
+    requestAnimationFrame(()=>restoreScrollState(scrollState));
   }catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
 async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
 $("q").oninput=()=>renderCards();
@@ -1265,9 +1323,9 @@ $("catQ").oninput=()=>{catFilter=$("catQ").value;renderCatalog()};
 $("catBack").onclick=()=>showCatList();
 $("closeBtn").onclick=closeDrawer;$("overlay").onclick=closeDrawer;
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classList.contains("open"))closeDrawer()});
-$("calcBuyMode").onclick=()=>{calcMode="buy";saveCalc();renderCalc()};
-$("calcSellMode").onclick=()=>{calcMode="sell";saveCalc();renderCalc()};
-$("calcTotalSellMode").onclick=()=>{calcMode="totalSell";saveCalc();renderCalc()};
+$("calcBuyMode").onclick=()=>{persistVisibleCalcInputs();calcMode="buy";saveCalc();renderCalc()};
+$("calcSellMode").onclick=()=>{persistVisibleCalcInputs();calcMode="sell";saveCalc();renderCalc()};
+$("calcTotalSellMode").onclick=()=>{persistVisibleCalcInputs();calcMode="totalSell";saveCalc();renderCalc()};
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
