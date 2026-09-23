@@ -400,10 +400,6 @@ let templates=JSON.parse(localStorage.getItem("sz_tpls")||"[]");
 let activeTpl=localStorage.getItem("sz_tpl_active")||"";
 let catIcons={};
 let itemRefreshTimer=null;
-let marketSince=null;
-let fullLoadAt=0;
-let prioritySentAt=0;
-
 function saveFavs(){localStorage.setItem("sz_favs",JSON.stringify(favIds))}
 function saveExcl(){localStorage.setItem("sz_excl",JSON.stringify(excludeIds))}
 function saveCats(){localStorage.setItem("sz_cats",JSON.stringify(selectedCats))}
@@ -575,6 +571,43 @@ function renderFavs(){
   }).join("");
   box.querySelectorAll(".fav-card").forEach(el=>{
     el.onclick=e=>{if(e.target.closest("[data-fav-rm]"))return;openItem(el.dataset.id)};
+    let tipTimer=null, tipEl=null;
+    el.onmouseenter=()=>{
+      tipTimer=setTimeout(()=>{
+        const id=el.dataset.id;
+        const r=rows.find(x=>x.id===id);
+        if(!r)return;
+        const listed=(r.lots||0)>0;
+        const unit=listed?(r.minUnitPrice??r.min_price):null;
+        const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
+        const deal=r.status==="cheap";
+        document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
+        tipEl=document.createElement("div");
+        tipEl.className="fav-tip show";
+        tipEl.innerHTML=`<div class="ft-title">${esc(r.name||id)}</div>
+          <div class="ft-row"><span>Статус</span><b class="${listed?"ft-deal":""}">${listed?"в продаже":"не выставлен"}</b></div>
+          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"—")}</b></div>
+          <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):(fallbackSale!=null?"0 · последняя продажа":"0")}</b></div>
+          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
+          ${deal?`<div class="ft-row ft-deal">Выгоднее рынка</div>`:""}`;
+        document.body.appendChild(tipEl);
+        const rect=el.getBoundingClientRect();
+        let left=rect.left;
+        let top=rect.bottom+6;
+        const tw=tipEl.offsetWidth, th=tipEl.offsetHeight;
+        if(left+tw>window.innerWidth-8)left=window.innerWidth-tw-8;
+        if(left<8)left=8;
+        if(top+th>window.innerHeight-8)top=rect.top-th-6;
+        if(top<8)top=8;
+        tipEl.style.left=left+"px";
+        tipEl.style.top=top+"px";
+      },600);
+    };
+    el.onmouseleave=()=>{
+      if(tipTimer){clearTimeout(tipTimer);tipTimer=null}
+      if(tipEl){tipEl.remove();tipEl=null}
+      document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
+    };
   });
   box.querySelectorAll("[data-fav-rm]").forEach(btn=>{
     btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.favRm)};
@@ -752,9 +785,17 @@ function renderCards(){
   if(selectedCats.length)list=list.filter(r=>selectedCats.includes(itemCat(r)));
   if(filter==="cheap")list=list.filter(r=>r.status==="cheap");
   else if(filter==="expensive")list=list.filter(r=>r.status==="expensive");
-  else if(filter==="liquid")list=list.filter(r=>(r.sales7d||0)>=3||(r.salesToday||0)>=1);
+  else if(filter==="liquid")list=list.filter(r=>(r.sales7d||0)>=3||(r.salesToday||0)>=1||(r.soldPerDay||0)>=1);
   else if(filter==="nodata")list=list.filter(r=>!r.dataOk);
-  if(q)list=fuzzyFilter(list,q);
+  if(q){
+    list=fuzzyFilter(list,q);
+    // If searching — also show matching items without active lots (e.g. Протоартефакт between scans)
+    if(filter==="all"){
+      const extra=fuzzyFilter(rows.filter(r=>(r.lots||0)===0&&!isExcl(r.id)), q, 30);
+      const seen=new Set(list.map(x=>x.id));
+      for(const r of extra){ if(!seen.has(r.id)){ list.push(r); seen.add(r.id);} }
+    }
+  }
   if(sortBy==="profit"){
     list.sort((a,b)=>(b.profitPct??-999)-(a.profitPct??-999));
   } else {
@@ -861,9 +902,14 @@ function renderCatalog(){
 }
 function saveCalc(){
   try{
-    localStorage.setItem("sz_calc",JSON.stringify(calcIds));localStorage.setItem("sz_calc_mode",calcMode);
-    localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
-    localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));localStorage.setItem("sz_calc_total_sell_prices",JSON.stringify(calcTotalSellPrices));localStorage.setItem("sz_calc_total_sell_qty",JSON.stringify(calcTotalSellQty));
+    localStorage.setItem("sz_calc",JSON.stringify(calcIds));
+    localStorage.setItem("sz_calc_mode",calcMode);
+    localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));
+    localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
+    localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));
+    localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+    localStorage.setItem("sz_calc_total_sell_prices",JSON.stringify(calcTotalSellPrices));
+    localStorage.setItem("sz_calc_total_sell_qty",JSON.stringify(calcTotalSellQty));
   }catch{}
 }
 function calcStoresFor(mode){
@@ -871,127 +917,231 @@ function calcStoresFor(mode){
   if(mode==="sell") return {prices:calcSellPrices, qty:calcSellQty};
   return {prices:calcTotalSellPrices, qty:calcTotalSellQty};
 }
-/** Save DOM inputs into the store of the mode they belong to (data-mode on #calcBody). Never cross-write buy↔sell. */
+function calcState(){ return calcStoresFor(calcMode); }
+function calcNum(v){
+  if(v==null) return NaN;
+  const s=String(v).replace(/\s+/g,"").replace(/,/g,".");
+  return s===""?NaN:Number(s);
+}
+/** Save visible inputs only into the mode stamped on #calcBody. Never cross buy/sell/total. */
 function persistVisibleCalcInputs(explicitMode){
   const body=$("calcBody");
-  const mode=explicitMode || (body && body.dataset.mode) || calcMode;
-  if(!mode) return;
+  if(!body) return;
+  const mode=explicitMode || body.dataset.mode;
+  if(mode!=="buy" && mode!=="sell" && mode!=="totalSell") return;
   const state=calcStoresFor(mode);
-  if(!body) { saveCalc(); return; }
-  body.querySelectorAll('input[data-price-id]').forEach(inp=>{
-    const id=inp.dataset.priceId, raw=String(inp.value??'');
-    if(raw.trim()) state.prices[id]=raw; else delete state.prices[id];
+  body.querySelectorAll("input[data-price-id]").forEach(inp=>{
+    const id=inp.dataset.priceId;
+    const raw=String(inp.value??"").trim();
+    if(raw) state.prices[id]=raw; else delete state.prices[id];
   });
-  body.querySelectorAll('input[data-qty-id]').forEach(inp=>{
-    const id=inp.dataset.qtyId, raw=String(inp.value??'');
-    if(raw.trim()) state.qty[id]=raw; else delete state.qty[id];
+  body.querySelectorAll("input[data-qty-id]").forEach(inp=>{
+    const id=inp.dataset.qtyId;
+    const raw=String(inp.value??"").trim();
+    if(raw) state.qty[id]=raw; else delete state.qty[id];
   });
   saveCalc();
 }
-function calcNum(v){if(v==null)return NaN;const s=String(v).replace(/\s+/g,"").replace(/,/g,".");return s===""?NaN:Number(s)}
-function calcState(){ return calcStoresFor(calcMode); }
-function recalcCalc(){
-  const state=calcState();let totalBuy=0,totalPlayer=0,totalAuction=0,hasBuy=false,hasSale=false;const details=[];
-  for(const id of calcIds){const r=rows.find(x=>x.id===id)||{id,name:id},price=calcNum(state.prices[id]),qty=calcNum(state.qty[id]);const vq=Number.isFinite(qty)&&qty>0,vp=Number.isFinite(price)&&price>=0;let unit=NaN,player=NaN,auction=NaN,commission=NaN;
-    if(vq&&vp){if(calcMode==="buy"){totalBuy+=price;hasBuy=true;unit=price/qty}else if(calcMode==="sell"){unit=price;player=price*qty;commission=player*.05;auction=player-commission;totalPlayer+=player;totalAuction+=auction;hasSale=true}else{player=price;unit=price/qty;commission=player*.05;auction=player-commission;totalPlayer+=player;totalAuction+=auction;hasSale=true}}
-    const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);if(tr){const u=tr.querySelector('.calc-unit'),a=tr.querySelector('.calc-auction'),pl=tr.querySelector('.calc-player');if(u)u.textContent=Number.isFinite(unit)?fmt(unit):'—';if(a)a.textContent=Number.isFinite(auction)?fmt(auction):'—';if(pl)pl.textContent=Number.isFinite(player)?fmt(player):'—'}
-    let h=`<div class="calc-item-info"><div class="title">${esc(r.name||id)}</div>`;
-    if(calcMode==="buy")h+=`<div class="info-row"><span>Количество</span><b>${vq?fmt(qty):'—'}</b></div><div class="info-row"><span>Общая цена покупки</span><b>${vp?fmt(price):'—'}</b></div><div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):'—'}</b></div>`;
-    else if(calcMode==="sell")h+=`<div class="info-row"><span>Цена за 1 шт.</span><b>${vp?fmt(price):'—'}</b></div><div class="info-row"><span>Количество</span><b>${vq?fmt(qty):'—'}</b></div><div class="info-row"><span>Продажа игроку</span><b>${Number.isFinite(player)?fmt(player):'—'}</b></div><div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):'—'}</b></div><div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):'—'}</b></div>`;
-    else h+=`<div class="info-row"><span>Общая цена товара</span><b>${vp?fmt(price):'—'}</b></div><div class="info-row"><span>Количество</span><b>${vq?fmt(qty):'—'}</b></div><div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):'—'}</b></div><div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):'—'}</b></div><div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):'—'}</b></div>`;
-    details.push(h+'</div>');
-  }
-  $("sumBuy").textContent=hasBuy?fmt(totalBuy):'—';$("sumPlayer").textContent=hasSale?fmt(totalPlayer):'—';$("sumAuctionNet").textContent=hasSale?fmt(totalAuction):'—';$("calcDetails").innerHTML=details.join('');
-}
-function updateCalcMode(){const buy=calcMode==="buy",sell=calcMode==="sell",total=calcMode==="totalSell";$("calcBuyMode").classList.toggle('active',buy);$("calcSellMode").classList.toggle('active',sell);$("calcTotalSellMode").classList.toggle('active',total);$("calcModeHint").textContent=buy?'Покупка: общая цена ÷ количество':sell?'Продажа: цена за 1 шт. × количество':'Общ. продажа: общая цена ÷ количество, аукцион −5%';$("calcHead").innerHTML=buy?'<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>':sell?'<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>':'<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';$("calcBuySummary").style.display=buy?'block':'none';$("calcSellSummary").style.display=buy?'none':'block'}
-function renderCalc(opts){
-  const skipPersist=!!(opts&&opts.skipPersist);
-  // Persist only into the mode the DOM currently represents — never into the target mode.
-  if(!skipPersist){
-    const domMode=$("calcBody")?.dataset?.mode;
-    if(domMode) persistVisibleCalcInputs(domMode);
-  }
-  const focused=document.activeElement;
-  const isFocused=focused&&focused.matches&&focused.matches('#calcBody input[data-qty-id],#calcBody input[data-price-id]');
-  const restore=isFocused?{
-    kind:focused.dataset.qtyId?'qty':'price',
-    id:focused.dataset.qtyId||focused.dataset.priceId,
-    start:focused.selectionStart,
-    end:focused.selectionEnd,
-    scroll:document.querySelector('#calcPane')?.closest?.('.scroll')?.scrollTop
-      ?? document.querySelector('.pane .scroll')?.scrollTop
-      ?? 0
-  }:null;
-
-  // If user is typing and the table already has the same set of rows for this mode, only recalculate.
-  if(isFocused){
-    const existing=Array.from(document.querySelectorAll('#calcBody tr[data-calc-id]')).map(tr=>tr.dataset.calcId);
-    const same=existing.length===calcIds.length && calcIds.every((id,i)=>existing[i]===id);
-    if(same){
-      updateCalcMode();
-      if($("calcBody")) $("calcBody").dataset.mode=calcMode;
-      recalcCalc();
-      return;
-    }
-  }
-
-  updateCalcMode();
-  const state=calcState();
-  if(!calcIds.length){
-    $("calcBody").innerHTML=`<tr><td colspan="${calcMode==='buy'?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
-    $("calcBody").dataset.mode=calcMode;
-    $("calcDetails").innerHTML='';
-    recalcCalc();
-    return;
-  }
-  $("calcBody").innerHTML=calcIds.map(id=>{
-    const r=rows.find(x=>x.id===id)||{id,name:id};
-    const price=state.prices[id]??'';
-    const qty=state.qty[id]??'';
-    if(calcMode==='buy')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего"></td><td class="calc-unit">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
-    if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
-    return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
-  }).join('');
-  $("calcBody").dataset.mode=calcMode;
-  $("calcBody").querySelectorAll('input[data-price-id]').forEach(inp=>inp.oninput=()=>{
-    const id=inp.dataset.priceId,state=calcState(),raw=inp.value.replace(/[^0-9.,]/g,'');
-    if(raw!==inp.value)inp.value=raw;
-    if(!raw.trim())delete state.prices[id]; else state.prices[id]=raw;
-    saveCalc();recalcCalc();
-  });
-  $("calcBody").querySelectorAll('input[data-qty-id]').forEach(inp=>{
+function bindCalcInputs(){
+  const body=$("calcBody");
+  if(!body) return;
+  body.querySelectorAll("input[data-price-id]").forEach(inp=>{
     inp.oninput=()=>{
-      const id=inp.dataset.qtyId,state=calcState(),raw=inp.value.replace(/[^0-9]/g,'');
-      if(raw!==inp.value)inp.value=raw;
-      if(!raw.trim())delete state.qty[id]; else state.qty[id]=raw;
-      saveCalc();recalcCalc();
+      const mode=body.dataset.mode || calcMode;
+      const state=calcStoresFor(mode);
+      const id=inp.dataset.priceId;
+      let raw=inp.value.replace(/[^0-9.,]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      raw=raw.trim();
+      if(!raw) delete state.prices[id]; else state.prices[id]=raw;
+      saveCalc();
+      recalcCalc();
+    };
+  });
+  body.querySelectorAll("input[data-qty-id]").forEach(inp=>{
+    inp.oninput=()=>{
+      const mode=body.dataset.mode || calcMode;
+      const state=calcStoresFor(mode);
+      const id=inp.dataset.qtyId;
+      let raw=inp.value.replace(/[^0-9]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      raw=raw.trim();
+      if(!raw) delete state.qty[id]; else state.qty[id]=raw;
+      saveCalc();
+      recalcCalc();
     };
     inp.onkeydown=e=>{
-      if(e.key==='Enter'){
+      if(e.key==="Enter"){
         e.preventDefault();
-        const x=inp.closest('tr')?.querySelector('input[data-price-id]');
-        if(x){x.focus();x.select()}
+        const x=inp.closest("tr")?.querySelector("input[data-price-id]");
+        if(x){ x.focus(); x.select(); }
       }
     };
   });
-  $("calcBody").querySelectorAll('.rm').forEach(btn=>btn.onclick=()=>{
-    const rid=btn.dataset.id;
-    calcIds=calcIds.filter(x=>x!==rid);
-    delete calcBuyPrices[rid];delete calcBuyQty[rid];
-    delete calcSellPrices[rid];delete calcSellQty[rid];
-    delete calcTotalSellPrices[rid];delete calcTotalSellQty[rid];
-    saveCalc();renderCalc();
-  });
-  recalcCalc();
-  if(restore)requestAnimationFrame(()=>{
-    const attr=restore.kind==='qty'?'data-qty-id':'data-price-id';
-    const el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);
-    if(el){
-      el.focus({preventScroll:true});
-      try{el.setSelectionRange(restore.start,restore.end)}catch{}
-    }
+  body.querySelectorAll(".rm").forEach(btn=>{
+    btn.onclick=()=>{
+      const rid=btn.dataset.id;
+      calcIds=calcIds.filter(x=>x!==rid);
+      delete calcBuyPrices[rid]; delete calcBuyQty[rid];
+      delete calcSellPrices[rid]; delete calcSellQty[rid];
+      delete calcTotalSellPrices[rid]; delete calcTotalSellQty[rid];
+      saveCalc();
+      renderCalc({skipPersist:true});
+    };
   });
 }
+function recalcCalc(){
+  const state=calcStoresFor(calcMode);
+  let totalBuy=0, totalPlayer=0, totalAuction=0, hasBuy=false, hasSale=false;
+  const details=[];
+  for(const id of calcIds){
+    const r=rows.find(x=>x.id===id)||{id,name:id};
+    const price=calcNum(state.prices[id]);
+    const qty=calcNum(state.qty[id]);
+    const vq=Number.isFinite(qty)&&qty>0;
+    const vp=Number.isFinite(price)&&price>=0;
+    let unit=NaN, player=NaN, auction=NaN, commission=NaN;
+    if(vq&&vp){
+      if(calcMode==="buy"){ totalBuy+=price; hasBuy=true; unit=price/qty; }
+      else if(calcMode==="sell"){
+        unit=price; player=price*qty; commission=player*0.05; auction=player-commission;
+        totalPlayer+=player; totalAuction+=auction; hasSale=true;
+      }else{
+        player=price; unit=price/qty; commission=player*0.05; auction=player-commission;
+        totalPlayer+=player; totalAuction+=auction; hasSale=true;
+      }
+    }
+    const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
+    if(tr){
+      const u=tr.querySelector(".calc-unit");
+      const a=tr.querySelector(".calc-auction");
+      const pl=tr.querySelector(".calc-player");
+      if(u) u.textContent=Number.isFinite(unit)?fmt(unit):"—";
+      if(a) a.textContent=Number.isFinite(auction)?fmt(auction):"—";
+      if(pl) pl.textContent=Number.isFinite(player)?fmt(player):"—";
+    }
+    let h=`<div class="calc-item-info"><div class="title">${esc(r.name||id)}</div>`;
+    if(calcMode==="buy"){
+      h+=`<div class="info-row"><span>Количество</span><b>${vq?fmt(qty):"—"}</b></div>
+        <div class="info-row"><span>Общая цена покупки</span><b>${vp?fmt(price):"—"}</b></div>
+        <div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):"—"}</b></div>`;
+    }else if(calcMode==="sell"){
+      h+=`<div class="info-row"><span>Цена за 1 шт.</span><b>${vp?fmt(price):"—"}</b></div>
+        <div class="info-row"><span>Количество</span><b>${vq?fmt(qty):"—"}</b></div>
+        <div class="info-row"><span>Продажа игроку</span><b>${Number.isFinite(player)?fmt(player):"—"}</b></div>
+        <div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):"—"}</b></div>
+        <div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):"—"}</b></div>`;
+    }else{
+      h+=`<div class="info-row"><span>Общая цена товара</span><b>${vp?fmt(price):"—"}</b></div>
+        <div class="info-row"><span>Количество</span><b>${vq?fmt(qty):"—"}</b></div>
+        <div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):"—"}</b></div>
+        <div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):"—"}</b></div>
+        <div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):"—"}</b></div>`;
+    }
+    details.push(h+"</div>");
+  }
+  $("sumBuy").textContent=hasBuy?fmt(totalBuy):"—";
+  $("sumPlayer").textContent=hasSale?fmt(totalPlayer):"—";
+  $("sumAuctionNet").textContent=hasSale?fmt(totalAuction):"—";
+  $("calcDetails").innerHTML=details.join("");
+}
+function updateCalcMode(){
+  const buy=calcMode==="buy", sell=calcMode==="sell", total=calcMode==="totalSell";
+  $("calcBuyMode").classList.toggle("active", buy);
+  $("calcSellMode").classList.toggle("active", sell);
+  $("calcTotalSellMode").classList.toggle("active", total);
+  $("calcModeHint").textContent=buy
+    ?"Покупка: общая цена ÷ количество"
+    :sell?"Продажа: цена за 1 шт. × количество"
+    :"Общ. продажа: общая цена ÷ количество, аукцион −5%";
+  $("calcHead").innerHTML=buy
+    ?"<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>"
+    :sell?"<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>"
+    :"<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>";
+  $("calcBuySummary").style.display=buy?"block":"none";
+  $("calcSellSummary").style.display=buy?"none":"block";
+}
+function renderCalc(opts){
+  const skipPersist=!!(opts&&opts.skipPersist);
+  const body=$("calcBody");
+  if(!skipPersist && body && body.dataset.mode){
+    persistVisibleCalcInputs(body.dataset.mode);
+  }
+  updateCalcMode();
+  const state=calcStoresFor(calcMode);
+  const focused=document.activeElement;
+  const isFocused=focused&&focused.matches&&focused.matches("#calcBody input[data-qty-id],#calcBody input[data-price-id]");
+  const restore=isFocused&&body&&body.dataset.mode===calcMode?{
+    kind:focused.dataset.qtyId?"qty":"price",
+    id:focused.dataset.qtyId||focused.dataset.priceId,
+    start:focused.selectionStart,
+    end:focused.selectionEnd
+  }:null;
+
+  // Keep caret only if still on the SAME mode table
+  if(isFocused && body && body.dataset.mode===calcMode){
+    const existing=Array.from(body.querySelectorAll("tr[data-calc-id]")).map(tr=>tr.dataset.calcId);
+    const same=existing.length===calcIds.length && calcIds.every((id,i)=>existing[i]===id);
+    if(same){ recalcCalc(); return; }
+  }
+
+  if(!calcIds.length){
+    body.innerHTML=`<tr><td colspan="${calcMode==="buy"?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
+    body.dataset.mode=calcMode;
+    $("calcDetails").innerHTML="";
+    recalcCalc();
+    return;
+  }
+
+  body.innerHTML=calcIds.map(id=>{
+    const r=rows.find(x=>x.id===id)||{id,name:id};
+    const price=state.prices[id]??"";
+    const qty=state.qty[id]??"";
+    if(calcMode==="buy"){
+      return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
+        <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество" autocomplete="off"></td>
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего" autocomplete="off"></td>
+        <td class="calc-unit">—</td>
+        <td><button class="rm" data-id="${esc(id)}" type="button">×</button></td></tr>`;
+    }
+    if(calcMode==="sell"){
+      return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт." autocomplete="off"></td>
+        <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество" autocomplete="off"></td>
+        <td class="calc-player">—</td>
+        <td class="calc-auction">—</td>
+        <td><button class="rm" data-id="${esc(id)}" type="button">×</button></td></tr>`;
+    }
+    return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
+      <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена" autocomplete="off"></td>
+      <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество" autocomplete="off"></td>
+      <td class="calc-unit">—</td>
+      <td class="calc-auction">—</td>
+      <td><button class="rm" data-id="${esc(id)}" type="button">×</button></td></tr>`;
+  }).join("");
+  body.dataset.mode=calcMode;
+  bindCalcInputs();
+  recalcCalc();
+  if(restore){
+    requestAnimationFrame(()=>{
+      const attr=restore.kind==="qty"?"data-qty-id":"data-price-id";
+      const el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);
+      if(el){
+        el.focus({preventScroll:true});
+        try{ el.setSelectionRange(restore.start, restore.end); }catch{}
+      }
+    });
+  }
+}
+function switchCalcMode(next){
+  if(next===calcMode) return;
+  const body=$("calcBody");
+  if(body && body.dataset.mode) persistVisibleCalcInputs(body.dataset.mode);
+  calcMode=next;
+  saveCalc();
+  renderCalc({skipPersist:true});
+}
+
 window.addEventListener("pagehide",persistVisibleCalcInputs);
 window.addEventListener("beforeunload",persistVisibleCalcInputs);
 
@@ -1310,122 +1460,17 @@ async function openItem(id,silent){
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
-function isCalcInputFocused(){
-  const el=document.activeElement;
-  return !!(el&&el.matches&&el.matches('#calcBody input[data-qty-id],#calcBody input[data-price-id],#calcQ,#scPrice,#scQty,#lotPriceFilter,#huntQ,#huntPrice,#q,#catQ'));
-}
-function mergeRows(incoming, full){
-  if(full || !rows.length){
-    rows=incoming||[];
-    return;
-  }
-  const map=new Map(rows.map(r=>[r.id,r]));
-  for(const r of (incoming||[])){
-    map.set(r.id, {...(map.get(r.id)||{}), ...r});
-  }
-  rows=[...map.values()];
-}
-function patchCardDom(r){
-  const el=document.querySelector(`.pcard[data-id="${CSS.escape(r.id)}"]`);
-  if(!el) return false;
-  const priceEl=el.querySelector(".pcard-price");
-  const qtyEl=el.querySelector(".pcard-qty");
-  const profitEl=el.querySelector(".pcard-profit");
-  const statusEl=el.querySelector(".pcard-status");
-  if(priceEl) priceEl.innerHTML=`${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`;
-  if(qtyEl) qtyEl.innerHTML=`<b>${fmtN(r.lots)} лот.</b>`;
-  if(profitEl && r.profit!=null){
-    profitEl.className="pcard-profit "+(r.profit>=0?"pos":"neg");
-    profitEl.textContent=`${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)`;
-  }
-  if(statusEl) statusEl.innerHTML=statusBadge(r);
-  el.classList.toggle("cheap", r.status==="cheap");
-  el.classList.toggle("expensive", r.status==="expensive");
-  el.classList.toggle("active", r.id===activeId);
-  return true;
-}
-function pushPriority(){
-  const now=Date.now();
-  if(now-prioritySentAt<20000) return;
-  prioritySentAt=now;
-  const ids=[...new Set([...(favIds||[]), ...(activeId?[activeId]:[])])].slice(0,100);
-  if(!ids.length) return;
-  fetch("/api/priority",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids,weight:15})}).catch(()=>{});
-}
-async function load(forceFull=false){try{
-    const now=Date.now();
-    const needFull=forceFull || !rows.length || !marketSince || (now-fullLoadAt>120000);
-    let j;
-    if(needFull){
-      j=await(await fetch("/api/market",{cache:"no-store"})).json();
-      mergeRows(j.rows||[], true);
-      fullLoadAt=now;
-    }else{
-      j=await(await fetch("/api/market/delta?since="+encodeURIComponent(marketSince),{cache:"no-store"})).json();
-      if(j.full){
-        mergeRows(j.rows||[], true);
-        fullLoadAt=now;
-      }else{
-        mergeRows(j.rows||[], false);
-        // try patch cards without full rebuild when filter is simple
-        const canPatch=filter==="all"&&!($("q").value||"").trim()&&!selectedCats.length&&sortBy!=="profit";
-        if(canPatch && (j.rows||[]).length && (j.rows||[]).length<80){
-          let patched=0;
-          for(const r of j.rows){ if(patchCardDom(r)) patched++; }
-          if(patched===j.rows.length){
-            // still refresh favs/hunt which are light
-            const scrollState=saveScrollState();
-            renderFavs();renderHunt();
-            if(rightTab==="calc"&&!isCalcInputFocused()) recalcCalc();
-            else if(rightTab==="calc"&&isCalcInputFocused()){ persistVisibleCalcInputs(); recalcCalc(); }
-            requestAnimationFrame(()=>restoreScrollState(scrollState));
-            if(j.updated) marketSince=j.updated;
-            pushPriority();
-            return;
-          }
-        }
-      }
-    }
-    if(j.updated) marketSince=j.updated;
-
-    const scrollState=saveScrollState();
-    const keepCalc=rightTab==="calc"&&isCalcInputFocused();
-    if(keepCalc)persistVisibleCalcInputs();
-    renderCatChips();renderTplBar();
-    renderCards();renderFavs();renderHunt();
-    if(rightTab==="catalog")renderCatalog();
-    if(rightTab==="calc"){
-      if(keepCalc) recalcCalc();
-      else renderCalc();
-    }
+async function load(){try{const j=await(await fetch("/api/market",{cache:"no-store"})).json();rows=j.rows||[];renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();
+    if(rightTab==="catalog")renderCatalog();if(rightTab==="calc")renderCalc();
     refreshFavoriteLots();
-    pushPriority();
-    requestAnimationFrame(()=>restoreScrollState(scrollState));
-  }catch(e){
-    if(!rows.length) $("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`;
-  }
-}
-async function updateStatus(){try{const j=await(await fetch("/api/status")).json();
-  let st=j.scanning?"сканирование…":"готово";
-  if(j.apiFailStreak>=3) st="API пауза";
-  $("st").textContent=st;
-  $("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";
-  $("cnt").textContent=j.itemCount||0;
-  $("lotCnt").textContent=j.lotItems||0;
-}catch{}}
+  }catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
+async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
 $("q").oninput=()=>renderCards();
 $("huntQ").oninput=renderHunt;$("huntPrice").oninput=renderHunt;
 $("catQ").oninput=()=>{catFilter=$("catQ").value;renderCatalog()};
 $("catBack").onclick=()=>showCatList();
 $("closeBtn").onclick=closeDrawer;$("overlay").onclick=closeDrawer;
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classList.contains("open"))closeDrawer()});
-function switchCalcMode(next){
-  const domMode=$("calcBody")?.dataset?.mode || calcMode;
-  persistVisibleCalcInputs(domMode); // save current fields into THEIR mode only
-  calcMode=next;
-  saveCalc();
-  renderCalc({skipPersist:true}); // rebuild from the target mode store, do not copy DOM into it
-}
 $("calcBuyMode").onclick=()=>switchCalcMode("buy");
 $("calcSellMode").onclick=()=>switchCalcMode("sell");
 $("calcTotalSellMode").onclick=()=>switchCalcMode("totalSell");
@@ -1449,9 +1494,9 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
   if(rightTab==="catalog")renderCatalog();
   if(rightTab==="calc")renderCalc();
 }});
-$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load(true);$("scanBtn").disabled=false},1500)};
+$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
-load(true);updateStatus();setInterval(()=>load(false),12000);setInterval(refreshFavoriteLots,2000);setInterval(updateStatus,4000);setInterval(pushPriority,60000);
+load();updateStatus();setInterval(load,15000);setInterval(refreshFavoriteLots,1500);setInterval(updateStatus,3000);
 </script>
 </body>
 </html>

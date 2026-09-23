@@ -96,6 +96,15 @@ let apiBackoffUntil = 0;
 let apiFailStreak = 0;
 let currentPollMs = POLL_MS;
 const liveBusy = new Set(); // item ids currently being live-fetched by UI
+
+// Always-scan popular trade goods (incl. Протоартефакт)
+const ALWAYS_PRIORITY = ["rdt1m5ve","55VrA59M","WdVYNOia","nb0OaSNs","rA8fsgH1","skuTyVhI","vKJbSN93","vpxznHgV"];
+try {
+  const ups = DB.prepare("INSERT INTO priority_items(id,weight,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at");
+  const now = new Date().toISOString();
+  for (const id of ALWAYS_PRIORITY) ups.run(id, 50, now);
+} catch (e) { console.warn("priority seed:", e.message); }
+
 let marketCache = { at: 0, rows: null, updated: null };
 const MARKET_CACHE_MS = 2500;
 
