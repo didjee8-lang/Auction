@@ -685,7 +685,18 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     lastSale,
     changeVsLast: (minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null,
     status, statusLabel, profit, profitPct,
-    ts: new Date().toISOString(),
+    // Real scan time — NOT "now", otherwise variants always pin to top of auction
+    ts: (()=>{
+      try {
+        const o=DB.prepare("SELECT ts FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1").get(baseItem.id);
+        if(o?.ts) return o.ts;
+      } catch {}
+      try {
+        const s=DB.prepare("SELECT MAX(seen_at) AS ts FROM lots WHERE item_id=?").get(baseItem.id);
+        if(s?.ts) return s.ts;
+      } catch {}
+      return null;
+    })(),
     isVariant: true
   };
 }

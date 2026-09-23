@@ -339,6 +339,40 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   .scanBtn, #scanBtn{order:3;padding:6px 10px}
 }
 
+
+.filters-toggle{display:none}
+.auction-filters{flex-shrink:0}
+@media(max-width:800px){
+  /* Auction takes remaining screen — filters collapsed */
+  .filters-toggle{
+    display:inline-flex;margin-left:auto;padding:6px 12px;font-size:12px;
+    border-color:var(--border);color:var(--text);
+  }
+  .filters-toggle.on{border-color:var(--neon);color:var(--neon2);box-shadow:0 0 8px var(--glow)}
+  .pane-head .chips{display:none;width:100%;order:5;margin-left:0;margin-top:6px}
+  .pane.filters-open .pane-head .chips{display:flex}
+  .auction-filters{display:none}
+  .pane.filters-open .auction-filters{display:block}
+  .main > .pane:first-child{
+    display:flex;flex-direction:column;flex:1;min-height:0;
+    height:100%;max-height:none;
+  }
+  .auction-scroll,.main > .pane:first-child > .scroll{
+    flex:1 1 auto;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;
+  }
+  /* Compact header zones so cards get max space */
+  .dashboard{padding:4px 6px;gap:4px;min-height:0}
+  .fav-card{width:118px;padding:4px 6px}
+  .fav-card .fav-icon{width:22px;height:22px}
+  .hunt{display:none} /* hide hunt on phone to free space; available on desktop */
+  .pane-head{padding:6px 8px;flex-wrap:wrap}
+  .filter-bar{padding:4px 8px}
+  .cards{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;padding-bottom:24px}
+  html,body{height:100%;height:100dvh;overflow:hidden}
+  .main{flex:1;min-height:0;overflow:hidden}
+  body{min-height:100dvh}
+}
+
 </style>
 </head>
 <body>
@@ -368,7 +402,8 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   <div class="pane">
     <div class="pane-head">
       <div class="pane-title">Аукцион <small id="activeCnt"></small></div>
-      <div class="chips">
+      <button type="button" class="btn filters-toggle" id="filtersToggle">Фильтры</button>
+      <div class="chips" id="auctionChips">
         <div class="chip active" data-f="all">Все</div>
         <div class="chip" data-f="cheap">Ниже рынка</div>
         <div class="chip" data-f="expensive">Выше рынка</div>
@@ -378,16 +413,18 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
         <div class="chip" data-s="profit">По выгоде</div>
       </div>
     </div>
-    <div class="filter-bar" id="tplBar">
-      <span class="fl">Шаблоны</span>
-      <div class="tpl-chip on" data-tpl="">Все</div>
-      <div class="tpl-chip add" id="tplAdd" title="Новый шаблон">+ Шаблон</div>
+    <div class="auction-filters" id="auctionFilters">
+      <div class="filter-bar" id="tplBar">
+        <span class="fl">Шаблоны</span>
+        <div class="tpl-chip on" data-tpl="">Все</div>
+        <div class="tpl-chip add" id="tplAdd" title="Новый шаблон">+ Шаблон</div>
+      </div>
+      <div class="filter-bar" id="catBar">
+        <span class="fl">Категории</span>
+        <div id="catChips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+      </div>
     </div>
-    <div class="filter-bar" id="catBar">
-      <span class="fl">Категории</span>
-      <div id="catChips" style="display:flex;flex-wrap:wrap;gap:5px"></div>
-    </div>
-    <div class="scroll"><div class="cards" id="cards"><div class="empty">Загрузка...</div></div></div>
+    <div class="scroll auction-scroll"><div class="cards" id="cards"><div class="empty">Загрузка...</div></div></div>
   </div>
   <div class="pane">
     <div class="pane-head" id="rightHead">
@@ -863,7 +900,15 @@ function renderCards(){
   if(sortBy==="profit"){
     list.sort((a,b)=>(b.profitPct??-999)-(a.profitPct??-999));
   } else {
-    list.sort((a,b)=>{const ta=a.ts?new Date(a.ts).getTime():0,tb=b.ts?new Date(b.ts).getTime():0;return tb!==ta?tb-ta:(b.lots||0)-(a.lots||0)});
+    // Newest listings first (by last scan/observation time). No category pinning.
+    list.sort((a,b)=>{
+      const ta=a.ts?new Date(a.ts).getTime():0;
+      const tb=b.ts?new Date(b.ts).getTime():0;
+      if(tb!==ta) return tb-ta;
+      const la=a.lots||0, lb=b.lots||0;
+      if(lb!==la) return lb-la;
+      return String(a.name||"").localeCompare(String(b.name||""),"ru");
+    });
   }
   $("activeCnt").textContent=list.length?`(${list.length})`:"";
   if(!list.length){$("cards").innerHTML=`<div class="empty" style="grid-column:1/-1">Нет лотов. Нажми «Сканировать» или смени фильтр</div>`;return}
@@ -1560,6 +1605,18 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
 }});
 $("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
+
+
+const filtersToggle=$("filtersToggle");
+if(filtersToggle){
+  filtersToggle.onclick=()=>{
+    const pane=filtersToggle.closest(".pane");
+    if(!pane)return;
+    const open=pane.classList.toggle("filters-open");
+    filtersToggle.classList.toggle("on", open);
+    filtersToggle.textContent=open?"Скрыть фильтры":"Фильтры";
+  };
+}
 
 /* Mobile navigation: auction full page, catalog/calc via sheet */
 function isMobile(){return window.matchMedia("(max-width:800px)").matches}
