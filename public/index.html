@@ -286,6 +286,59 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .trade-metric b.r{color:var(--red)}
 @media(max-width:900px){.trade-item{gap:8px;padding:6px 7px}.trade-name{flex-basis:115px}.trade-metrics{gap:9px}.trade-metric small{font-size:8px}.trade-metric b{font-size:10px}}
 @media(max-width:600px){.trade-item{align-items:flex-start;flex-direction:column;gap:4px}.trade-name{width:100%;flex-basis:auto}.trade-metrics{width:100%;overflow-x:auto;padding-bottom:1px}}
+
+/* --- Mobile: full-page auction, menu for catalog/calc, favs on top --- */
+.mobile-nav-btn{display:none}
+.mobile-nav-sheet{display:none}
+@media(max-width:800px){
+  .mobile-nav-btn{display:inline-flex;align-items:center;margin-left:auto;border-color:var(--neon);color:var(--neon2)}
+  .status{margin-left:0;width:100%;order:10}
+  .top{gap:8px}
+  .mobile-nav-sheet{
+    display:flex;flex-direction:column;gap:8px;
+    position:fixed;top:0;right:0;bottom:0;width:min(280px,85vw);
+    background:var(--panel);border-left:1px solid var(--border);
+    z-index:50;padding:56px 14px 14px;
+    box-shadow:-12px 0 40px rgba(0,0,0,.6);
+    transform:translateX(100%);transition:transform .2s ease;
+  }
+  .mobile-nav-sheet.open{transform:translateX(0)}
+  .mobile-nav-sheet[hidden]{display:none!important}
+  .mobile-nav-item{
+    background:var(--card);border:1px solid var(--border);color:var(--text);
+    padding:14px 16px;border-radius:10px;font-size:15px;font-weight:600;text-align:left;cursor:pointer;
+  }
+  .mobile-nav-item:hover,.mobile-nav-item.active{border-color:var(--neon);color:var(--neon2);box-shadow:0 0 12px var(--glow)}
+  .mobile-nav-close{
+    margin-top:auto;background:transparent;border:1px solid var(--border);color:var(--muted);
+    padding:12px;border-radius:10px;cursor:pointer;
+  }
+  .main{grid-template-columns:1fr!important;overflow:hidden}
+  .main > .pane:first-child{display:flex;min-height:0;border-bottom:none;flex:1}
+  .main > .pane:last-child{
+    display:none;position:fixed;inset:0;z-index:45;
+    background:var(--bg);border:none;flex-direction:column;
+  }
+  .main.mobile-right > .pane:first-child{display:none}
+  .main.mobile-right > .pane:last-child{display:flex}
+  .dashboard{
+    max-height:none!important;height:auto;overflow:visible;
+    padding:6px 8px;gap:6px;
+  }
+  .fav-card{width:132px}
+  .hunt{padding:6px 8px}
+  .filter-bar{padding:4px 8px}
+  body.mobile-nav-open::after{
+    content:"";position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:49;
+  }
+}
+@media(max-width:480px){
+  .logo{font-size:13px}
+  .search{flex:1 1 100%;max-width:none;order:5}
+  .mobile-nav-btn{order:2}
+  .scanBtn, #scanBtn{order:3;padding:6px 10px}
+}
+
 </style>
 </head>
 <body>
@@ -293,16 +346,23 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   <div class="logo">Auction</div>
   <input class="search" id="q" placeholder="Поиск на аукционе..." autocomplete="off">
   <button class="btn primary" id="scanBtn">Сканировать</button>
+  <button class="btn mobile-nav-btn" id="mobileNavBtn" type="button" title="Каталог / Калькулятор">☰ Меню</button>
   <div class="status"><span id="st">—</span> · <b id="last">—</b> · <span id="cnt">0</span> / <span id="lotCnt">0</span> с лотами</div>
+</div>
+<div class="mobile-nav-sheet" id="mobileNavSheet" hidden>
+  <button type="button" class="mobile-nav-item" data-mobile-tab="auction">Аукцион</button>
+  <button type="button" class="mobile-nav-item" data-mobile-tab="catalog">Каталог</button>
+  <button type="button" class="mobile-nav-item" data-mobile-tab="calc">Калькулятор</button>
+  <button type="button" class="mobile-nav-close" id="mobileNavClose">Закрыть</button>
+</div>
+<div class="dashboard" id="dashboard">
+  <div class="fav-empty">Избранное пусто — нажми ★ на карточке лота</div>
 </div>
 <div class="hunt" id="hunt">
   <span class="hunt-label">Охота</span>
   <input id="huntQ" placeholder="Предмет (название или ID)..." autocomplete="off">
   <input id="huntPrice" type="text" inputmode="decimal" placeholder="Цена / шт." autocomplete="off">
   <div class="hunt-results" id="huntResults"><span class="hunt-empty">Введи предмет и желаемую цену за шт.</span></div>
-</div>
-<div class="dashboard" id="dashboard">
-  <div class="fav-empty">Избранное пусто — нажми ★ на карточке лота</div>
 </div>
 <div class="main">
   <div class="pane">
@@ -1500,6 +1560,73 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
 }});
 $("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
+
+/* Mobile navigation: auction full page, catalog/calc via sheet */
+function isMobile(){return window.matchMedia("(max-width:800px)").matches}
+function closeMobileNav(){
+  const sheet=$("mobileNavSheet");
+  if(sheet){sheet.classList.remove("open");sheet.hidden=true}
+  document.body.classList.remove("mobile-nav-open");
+}
+function openMobileNav(){
+  const sheet=$("mobileNavSheet");
+  if(!sheet)return;
+  sheet.hidden=false;
+  requestAnimationFrame(()=>sheet.classList.add("open"));
+  document.body.classList.add("mobile-nav-open");
+}
+function setMobileView(tab){
+  const main=document.querySelector(".main");
+  if(!main)return;
+  if(!isMobile()){
+    main.classList.remove("mobile-right");
+    return;
+  }
+  if(tab==="auction"){
+    main.classList.remove("mobile-right");
+    rightTab="catalog"; // keep default for when expanding later
+  }else{
+    main.classList.add("mobile-right");
+    rightTab=tab==="calc"?"calc":"catalog";
+    document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab===rightTab));
+    $("catHead").style.display="none";
+    $("mainTabs").style.display="flex";
+    $("catalogPane").style.display=rightTab==="catalog"?"block":"none";
+    $("catItemsPane").style.display="none";
+    $("calcPane").style.display=rightTab==="calc"?"block":"none";
+    if(rightTab==="catalog")renderCatalog();
+    if(rightTab==="calc")renderCalc();
+  }
+  document.querySelectorAll(".mobile-nav-item").forEach(b=>{
+    b.classList.toggle("active", b.dataset.mobileTab===tab || (tab==="catalog"&&b.dataset.mobileTab==="catalog") || (tab==="calc"&&b.dataset.mobileTab==="calc"));
+  });
+  closeMobileNav();
+}
+const _mNavBtn=$("mobileNavBtn");
+if(_mNavBtn)_mNavBtn.onclick=()=>{
+  const sheet=$("mobileNavSheet");
+  if(sheet && !sheet.hidden && sheet.classList.contains("open")) closeMobileNav();
+  else openMobileNav();
+};
+const _mNavClose=$("mobileNavClose");
+if(_mNavClose)_mNavClose.onclick=closeMobileNav;
+document.querySelectorAll(".mobile-nav-item").forEach(btn=>{
+  btn.onclick=()=>setMobileView(btn.dataset.mobileTab);
+});
+document.addEventListener("click",e=>{
+  if(!isMobile())return;
+  if(document.body.classList.contains("mobile-nav-open") && !e.target.closest("#mobileNavSheet") && !e.target.closest("#mobileNavBtn")){
+    closeMobileNav();
+  }
+});
+window.addEventListener("resize",()=>{
+  if(!isMobile()){
+    document.querySelector(".main")?.classList.remove("mobile-right");
+    closeMobileNav();
+  }
+});
+
+
 load();updateStatus();setInterval(load,15000);setInterval(refreshFavoriteLots,1500);setInterval(updateStatus,3000);
 </script>
 </body>
