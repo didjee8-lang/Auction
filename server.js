@@ -55,6 +55,8 @@ const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, "market.db");
 const DB = new Database(DB_FILE);
 
 DB.pragma("journal_mode = WAL");
+DB.pragma("busy_timeout = 5000");
+DB.pragma("synchronous = NORMAL");
 DB.exec(`
 CREATE TABLE IF NOT EXISTS items(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT, rarity TEXT, icon TEXT
@@ -72,6 +74,9 @@ CREATE TABLE IF NOT EXISTS sale_observations(
  PRIMARY KEY(item_id,sale_id)
 );
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
+CREATE TABLE IF NOT EXISTS priority_items(
+ id TEXT PRIMARY KEY, weight INTEGER NOT NULL DEFAULT 1, updated_at TEXT
+);
 `);
 
 try { DB.exec("ALTER TABLE lots ADD COLUMN qlt INTEGER"); } catch {}
@@ -79,29 +84,75 @@ try { DB.exec("ALTER TABLE lots ADD COLUMN ptn INTEGER"); } catch {}
 try { DB.exec("ALTER TABLE sale_observations ADD COLUMN qlt INTEGER"); } catch {}
 try { DB.exec("ALTER TABLE sale_observations ADD COLUMN ptn INTEGER"); } catch {}
 
+try {
+  DB.exec("CREATE INDEX IF NOT EXISTS idx_lots_item_price ON lots(item_id, price)");
+  DB.exec("CREATE INDEX IF NOT EXISTS idx_price_obs_item_ts ON price_observations(item_id, ts DESC)");
+  DB.exec("CREATE INDEX IF NOT EXISTS idx_sale_obs_item_ts ON sale_observations(item_id, ts DESC)");
+  DB.exec("CREATE INDEX IF NOT EXISTS idx_sale_obs_item_qlt ON sale_observations(item_id, qlt, ptn)");
+} catch (e) { console.warn("index create:", e.message); }
 
 let token = null, tokenExp = 0, scanning = false, scanCursor = 0, lastScan = null, lastError = null;
+let apiBackoffUntil = 0;
+let apiFailStreak = 0;
+let currentPollMs = POLL_MS;
+const liveBusy = new Set(); // item ids currently being live-fetched by UI
+let marketCache = { at: 0, rows: null, updated: null };
+const MARKET_CACHE_MS = 2500;
 
 async function getToken(){
   if(token && Date.now() < tokenExp - 30000) return token;
   if(!ID || !SECRET) throw new Error("STALZONE_CLIENT_ID / STALZONE_CLIENT_SECRET not configured");
   const body = new URLSearchParams({grant_type:"client_credentials",client_id:ID,client_secret:SECRET});
-  const r = await fetch("https://exbo.net/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});
-  const j = await r.json().catch(()=>({}));
-  if(!r.ok || !j.access_token) throw new Error(`OAuth ${r.status}: ${JSON.stringify(j)}`);
-  token=j.access_token; tokenExp=Date.now()+Number(j.expires_in||3600)*1000; return token;
-}
-
-async function api(apiPath){
-  const t=await getToken();
-  const r=await fetch(`${API}/${REGION}${apiPath}`,{headers:{Authorization:`Bearer ${t}`,Accept:"application/json"}});
-  const txt=await r.text();
-  let j; try{j=JSON.parse(txt)}catch{j={raw:txt}};
-  if(!r.ok) throw new Error(`API ${r.status}: ${txt.slice(0,400)}`);
-  return j;
+  let lastErr;
+  for(let attempt=0; attempt<3; attempt++){
+    try{
+      const r = await fetch("https://exbo.net/oauth/token",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body});
+      const j = await r.json().catch(()=>({}));
+      if(!r.ok || !j.access_token) throw new Error(`OAuth ${r.status}: ${JSON.stringify(j)}`);
+      token=j.access_token; tokenExp=Date.now()+Number(j.expires_in||3600)*1000;
+      return token;
+    }catch(e){
+      lastErr=e;
+      await sleep(500 * (attempt+1));
+    }
+  }
+  throw lastErr || new Error("OAuth failed");
 }
 
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+async function api(apiPath){
+  const now=Date.now();
+  if(now < apiBackoffUntil){
+    await sleep(Math.min(apiBackoffUntil - now, 8000));
+  }
+  let lastErr;
+  for(let attempt=0; attempt<3; attempt++){
+    try{
+      const t=await getToken();
+      const r=await fetch(`${API}/${REGION}${apiPath}`,{headers:{Authorization:`Bearer ${t}`,Accept:"application/json"}});
+      const txt=await r.text();
+      let j; try{j=JSON.parse(txt)}catch{j={raw:txt}};
+      if(r.status===429 || r.status===503){
+        const wait=Math.min(30000, 1000 * Math.pow(2, attempt+apiFailStreak));
+        apiFailStreak=Math.min(8, apiFailStreak+1);
+        apiBackoffUntil=Date.now()+wait;
+        lastErr=new Error(`API ${r.status}: rate limited`);
+        await sleep(wait);
+        continue;
+      }
+      if(!r.ok) throw new Error(`API ${r.status}: ${txt.slice(0,400)}`);
+      apiFailStreak=Math.max(0, apiFailStreak-1);
+      if(apiFailStreak===0) apiBackoffUntil=0;
+      return j;
+    }catch(e){
+      lastErr=e;
+      if(String(e.message||"").includes("API 4") && !String(e.message).includes("429")) break;
+      await sleep(300 * (attempt+1));
+    }
+  }
+  throw lastErr || new Error("API failed");
+}
 
 async function syncItems(){
   console.log("Syncing items from listing.json ...");
@@ -209,13 +260,28 @@ async function fetchAllLots(itemId){
 }
 
 function saveLots(itemId,lots,now=new Date().toISOString()){
-  DB.prepare("DELETE FROM lots WHERE item_id=?").run(itemId);
   const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
-  const tx=DB.transaction(a=>{for(const x of a)ins.run(itemId,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn)});
+  const delMissing=DB.prepare(`DELETE FROM lots WHERE item_id=? AND lot_id NOT IN (SELECT value FROM json_each(?))`);
+  const delAll=DB.prepare(`DELETE FROM lots WHERE item_id=?`);
+  const tx=DB.transaction(a=>{
+    if(!a.length){ delAll.run(itemId); return; }
+    const ids=a.map(x=>x.id);
+    for(const x of a)ins.run(itemId,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn);
+    // remove lots that disappeared
+    try { delMissing.run(itemId, JSON.stringify(ids)); }
+    catch {
+      // fallback if json_each unavailable
+      const keep=new Set(ids);
+      const existing=DB.prepare("SELECT lot_id FROM lots WHERE item_id=?").all(itemId);
+      const rm=DB.prepare("DELETE FROM lots WHERE item_id=? AND lot_id=?");
+      for(const e of existing){ if(!keep.has(e.lot_id)) rm.run(itemId, e.lot_id); }
+    }
+  });
   tx(lots);
   const prices=lots.map(x=>x.price).filter(p=>p>0).sort((a,b)=>a-b);
   DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
     .run(itemId,now,prices[0]||null,prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null,prices.length?prices[prices.length-1]:null,lots.length);
+  marketCache.at=0; // invalidate
   return prices;
 }
 
@@ -254,38 +320,72 @@ async function mapPool(items, limit, fn){
 
 async function scanCycle(){
   if(scanning)return;
+  if(Date.now() < apiBackoffUntil) {
+    console.log("Scan deferred: API backoff");
+    return;
+  }
   scanning=true; lastError=null;
   try{
     let all=DB.prepare("SELECT * FROM items").all();
     if(!all.length){ await syncItems(); all=DB.prepare("SELECT * FROM items").all(); }
 
-    // Priority: items that already have lots or recent sales first
+    const priorityRows=DB.prepare("SELECT id, weight FROM priority_items").all();
+    const prioMap=new Map(priorityRows.map(x=>[x.id, Number(x.weight)||1]));
+
     const hotIds=new Set(
       DB.prepare("SELECT DISTINCT item_id FROM lots").all().map(x=>x.item_id)
-        .concat(DB.prepare("SELECT DISTINCT item_id FROM sale_observations").all().map(x=>x.item_id))
+        .concat(DB.prepare("SELECT DISTINCT item_id FROM sale_observations WHERE ts >= datetime('now','-2 days')").all().map(x=>x.item_id))
     );
+
+    // score: priority (client favs) > has lots/sales > rest; skip items currently live-fetched by UI last
     all.sort((a,b)=>{
+      const ap=prioMap.has(a.id)?0:1;
+      const bp=prioMap.has(b.id)?0:1;
+      if(ap!==bp) return ap-bp;
+      if(ap===0){
+        const aw=prioMap.get(a.id)||0, bw=prioMap.get(b.id)||0;
+        if(bw!==aw) return bw-aw;
+      }
       const ah=hotIds.has(a.id)?0:1;
       const bh=hotIds.has(b.id)?0:1;
       if(ah!==bh) return ah-bh;
+      const al=liveBusy.has(a.id)?1:0;
+      const bl=liveBusy.has(b.id)?1:0;
+      if(al!==bl) return al-bl;
       return (a.id||"").localeCompare(b.id||"");
     });
 
-    // rotate through list
+    // Always include top priority items first each cycle
     const selected=[];
-    for(let k=0;k<Math.min(MAX_ITEMS_PER_CYCLE,all.length);k++){
-      selected.push(all[(scanCursor+k)%all.length]);
+    const seen=new Set();
+    for(const id of [...prioMap.keys()].sort((a,b)=>(prioMap.get(b)||0)-(prioMap.get(a)||0))){
+      const it=all.find(x=>x.id===id);
+      if(it && !seen.has(id)){ selected.push(it); seen.add(id); }
+      if(selected.length>=Math.min(40, MAX_ITEMS_PER_CYCLE)) break;
     }
-    scanCursor=(scanCursor+selected.length)%Math.max(all.length,1);
+    for(let k=0;k<all.length && selected.length<Math.min(MAX_ITEMS_PER_CYCLE,all.length);k++){
+      const it=all[(scanCursor+k)%all.length];
+      if(!seen.has(it.id)){ selected.push(it); seen.add(it.id); }
+    }
+    scanCursor=(scanCursor+Math.max(1, selected.length - Math.min(40, prioMap.size)))%Math.max(all.length,1);
 
-    // process in parallel batches
     for(let i=0;i<selected.length;i+=CONCURRENCY){
-      const batch=selected.slice(i,i+CONCURRENCY);
+      const batch=selected.slice(i,i+CONCURRENCY).filter(x=>!liveBusy.has(x.id));
+      if(!batch.length) continue;
       await mapPool(batch, CONCURRENCY, scanOne);
       if(i+CONCURRENCY<selected.length) await sleep(BATCH_DELAY_MS);
     }
     lastScan=new Date().toISOString();
-    console.log(`Scan done: ${selected.length} items, cursor=${scanCursor}`);
+    // adaptive poll: slow down on errors, speed up when healthy
+    if(apiFailStreak>=3) currentPollMs=Math.min(POLL_MS*3, 180000);
+    else if(apiFailStreak>=1) currentPollMs=Math.min(POLL_MS*1.5, 90000);
+    else currentPollMs=POLL_MS;
+    marketCache.at=0;
+    console.log(`Scan done: ${selected.length} items, cursor=${scanCursor}, poll=${currentPollMs}ms`);
+  }catch(e){
+    lastError=e.message;
+    apiFailStreak=Math.min(8, apiFailStreak+1);
+    currentPollMs=Math.min(POLL_MS*2, 120000);
   }finally{scanning=false}
 }
 
@@ -359,7 +459,11 @@ app.get("/api/status",(_,res)=>res.json({
   itemCount:DB.prepare("SELECT count(*) n FROM items").get().n,
   lotItems:DB.prepare("SELECT count(DISTINCT item_id) n FROM lots").get().n,
   observationCount:DB.prepare("SELECT count(*) n FROM price_observations").get().n,
-  concurrency:CONCURRENCY
+  concurrency:CONCURRENCY,
+  pollMs:currentPollMs,
+  apiBackoffUntil:apiBackoffUntil||null,
+  apiFailStreak,
+  priorityCount:DB.prepare("SELECT count(*) n FROM priority_items").get().n
 }));
 
 app.post("/api/items/sync",async(_,res)=>{
@@ -373,115 +477,171 @@ app.post("/api/scan",async(_,res)=>{
   res.json({ok:true,started:true});
 });
 
-app.get("/api/market",(_,res)=>{
-  const q=String(_.query.q||"").toLowerCase();
-  let items=DB.prepare("SELECT * FROM items ORDER BY name").all();
-  if(q)items=items.filter(x=>(x.name||"").toLowerCase().includes(q)||(x.id||"").toLowerCase().includes(q));
-
+function buildMarketRow(x){
   const getLast=DB.prepare(`SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1`);
   const getLots=DB.prepare(`SELECT price, amount, qlt, ptn FROM lots WHERE item_id=? ORDER BY price ASC`);
-  const getSalesGroup=DB.prepare(`SELECT price, amount FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) AND (ptn IS ? OR (ptn IS NULL AND ? IS NULL))`);
+  const o=getLast.get(x.id);
+  const lotRows=getLots.all(x.id);
+  const lotsCount=lotRows.length;
+  const totalAmount=lotRows.reduce((sum,l)=>sum+(Number(l.amount)||0),0);
+  const lotPrices=lotRows.map(l=>l.price).filter(p=>p>0);
+  const minLot=lotRows[0]||null;
+  const minP=minLot?.price??(o?.min_price??null);
+  const minQlt=minLot?.qlt??null;
+  const minPtn=minLot?.ptn??null;
+  const lotAvg=lotPrices.length?avgOf(lotPrices):(o?.avg_price??null);
+  const sameLots=lotRows.filter(l=>l.qlt===minQlt && l.ptn===minPtn).map(l=>l.price).filter(p=>p>0);
 
-  const rows=items.map(x=>{
-    const o=getLast.get(x.id);
-    const lotRows=getLots.all(x.id);
-    const lotsCount=lotRows.length;
-    const totalAmount=lotRows.reduce((sum,l)=>sum+(Number(l.amount)||0),0);
-    const lotPrices=lotRows.map(l=>l.price).filter(p=>p>0);
-    const minLot=lotRows[0]||null;
-    const minP=minLot?.price??(o?.min_price??null);
-    const minQlt=minLot?.qlt??null;
-    const minPtn=minLot?.ptn??null;
-    const lotAvg=lotPrices.length?avgOf(lotPrices):(o?.avg_price??null);
+  let saleGroup=[];
+  try {
+    saleGroup=DB.prepare(`
+      SELECT price, amount, ts
+      FROM sale_observations
+      WHERE item_id=?
+        AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+        AND (ptn IS ? OR (ptn IS NULL AND ? IS NULL))
+        AND price>0
+      ORDER BY datetime(ts) DESC
+      LIMIT 20
+    `).all(x.id, minQlt, minQlt, minPtn, minPtn);
+  } catch { saleGroup=[]; }
+  const salePrices=weightedPrices(saleGroup);
 
-    // Same qlt+ptn group for fair comparison
-    const sameLots=lotRows.filter(l=>l.qlt===minQlt && l.ptn===minPtn).map(l=>l.price).filter(p=>p>0);
+  let ref=null, refSource="none", refCount=0, dataOk=false;
+  if(salePrices.length>=3){
+    ref=medianOf(salePrices);
+    refSource="recent_sales_20";
+    refCount=saleGroup.length;
+    dataOk=true;
+  } else if(sameLots.length>=3){
+    ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=true;
+  } else if(sameLots.length>=1){
+    ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=false;
+  } else if(salePrices.length>=1){
+    ref=medianOf(salePrices); refSource="sales_qlt_ptn"; refCount=saleGroup.length; dataOk=false;
+  }
 
-    // IMPORTANT: the market/profit reference must follow the recent sales shown
-    // to the user, not the entire historical database. Old high prices can otherwise
-    // produce a fake profit even when current lots and recent sales are ~900k.
-    let saleGroup=[];
-    try {
-      saleGroup=DB.prepare(`
-        SELECT price, amount, ts
-        FROM sale_observations
-        WHERE item_id=?
-          AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
-          AND (ptn IS ? OR (ptn IS NULL AND ? IS NULL))
-          AND price>0
-        ORDER BY datetime(ts) DESC
-        LIMIT 20
-      `).all(x.id, minQlt, minQlt, minPtn, minPtn);
-    } catch { saleGroup=[]; }
-    const salePrices=weightedPrices(saleGroup);
+  let status="no_data", statusLabel="Мало данных";
+  if(minP && ref && dataOk){
+    const ratio=minP/ref;
+    if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
+    else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
+    else { status="normal"; statusLabel="Обычная"; }
+  } else if(minP && ref && !dataOk){
+    const ratio=minP/ref;
+    if(ratio<=0.85){ status="cheap"; statusLabel="Ниже рынка"; }
+    else if(ratio>=1.20){ status="expensive"; statusLabel="Выше рынка"; }
+    else if(minP){ status="has_lots"; statusLabel="В продаже"; }
+  } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
 
-    let ref=null, refSource="none", refCount=0, dataOk=false;
-    if(salePrices.length>=3){
-      ref=medianOf(salePrices);
-      refSource="recent_sales_20";
-      refCount=saleGroup.length;
-      dataOk=true;
-    } else if(sameLots.length>=3){
-      // C: only current lots of same rarity+enhancement
-      ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=true;
-    } else if(sameLots.length>=1){
-      ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=false;
-    } else if(salePrices.length>=1){
-      ref=medianOf(salePrices); refSource="sales_qlt_ptn"; refCount=saleGroup.length; dataOk=false;
+  const profit=(minP!=null && ref!=null)?Math.round(ref*0.95 - minP):null;
+  const profitPct=(minP && ref && minP>0)?Math.round(((ref*0.95 - minP)/minP)*1000)/10:null;
+  const lastSaleRow=DB.prepare("SELECT price,ts,qlt,ptn FROM sale_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1").get(x.id);
+  const lastSale=lastSaleRow?.price??null;
+  const changeVsLast=(minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null;
+  const sa=salesAverages(x.id);
+  const soldPerDay=sa.sales7d!=null ? Math.round((sa.sales7d/7)*10)/10 : 0;
+
+  return {
+    ...x,
+    min_price:minP,
+    avg_price:lotAvg,
+    max_price:lotPrices.length?lotPrices[lotPrices.length-1]:(o?.max_price??null),
+    lots:lotsCount,
+    totalAmount:totalAmount>0?totalAmount:null,
+    minAmount:minLot?.amount??null,
+    minTotalPrice:minLot?.price!=null && minLot?.amount!=null ? Math.round(minLot.price*minLot.amount) : null,
+    minUnitPrice:minLot?.price??minP,
+    minQlt, minPtn,
+    qltLabel:qltLabel(minQlt),
+    histMedian:ref,
+    histSource:refSource,
+    histCount:refCount,
+    dataOk,
+    avgAll:sa.avgAll,
+    avg7d:sa.avg7d,
+    avgToday:sa.avgToday,
+    avgYesterday:sa.avgYesterday,
+    salesCount:sa.salesCount,
+    sales7d:sa.sales7d,
+    salesToday:sa.salesToday,
+    salesYesterday:sa.salesYesterday,
+    soldPerDay,
+    lastSale,
+    changeVsLast,
+    status,statusLabel,
+    profit,profitPct,
+    ts:o?.ts||null
+  };
+}
+
+function getMarketRows(force=false){
+  const now=Date.now();
+  if(!force && marketCache.rows && (now-marketCache.at)<MARKET_CACHE_MS){
+    return {updated:marketCache.updated||lastScan, rows:marketCache.rows};
+  }
+  const items=DB.prepare("SELECT * FROM items ORDER BY name").all();
+  const rows=items.map(buildMarketRow);
+  marketCache={at:now, rows, updated:lastScan};
+  return {updated:lastScan, rows};
+}
+
+app.get("/api/market",(_,res)=>{
+  try{
+    const q=String(_.query.q||"").toLowerCase();
+    let {updated, rows}=getMarketRows();
+    if(q) rows=rows.filter(x=>(x.name||"").toLowerCase().includes(q)||(x.id||"").toLowerCase().includes(q));
+    res.json({updated, rows});
+  }catch(e){
+    res.status(500).json({ok:false,error:e.message});
+  }
+});
+
+// Lightweight delta: only rows changed since `since` (by observation ts or lot seen_at)
+app.get("/api/market/delta",(req,res)=>{
+  try{
+    const since=String(req.query.since||"").trim();
+    const {updated, rows}=getMarketRows();
+    if(!since){
+      return res.json({updated, full:true, rows});
     }
+    const sinceT=new Date(since).getTime();
+    if(!Number.isFinite(sinceT)){
+      return res.json({updated, full:true, rows});
+    }
+    const changed=rows.filter(r=>{
+      if(!r.ts) return (r.lots||0)>0;
+      const t=new Date(r.ts).getTime();
+      return Number.isFinite(t) && t>=sinceT-2000;
+    });
+    // also include items that lost all lots (were listed before)
+    res.json({updated, full:false, since, rows:changed, total:rows.length});
+  }catch(e){
+    res.status(500).json({ok:false,error:e.message});
+  }
+});
 
-    let status="no_data", statusLabel="Мало данных";
-    if(minP && ref && dataOk){
-      const ratio=minP/ref;
-      if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
-      else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
-      else { status="normal"; statusLabel="Обычная"; }
-    } else if(minP && ref && !dataOk){
-      const ratio=minP/ref;
-      if(ratio<=0.85){ status="cheap"; statusLabel="Ниже рынка"; }
-      else if(ratio>=1.20){ status="expensive"; statusLabel="Выше рынка"; }
-      else if(minP){ status="has_lots"; statusLabel="В продаже"; }
-    } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
-
-    const profit=(minP!=null && ref!=null)?Math.round(ref*0.95 - minP):null;
-    const profitPct=(minP && ref && minP>0)?Math.round(((ref*0.95 - minP)/minP)*1000)/10:null;
-    const lastSaleRow=DB.prepare("SELECT price,ts,qlt,ptn FROM sale_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1").get(x.id);
-    const lastSale=lastSaleRow?.price??null;
-    const changeVsLast=(minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null;
-    const sa=salesAverages(x.id);
-
-    return {
-      ...x,
-      min_price:minP,
-      avg_price:lotAvg,
-      max_price:lotPrices.length?lotPrices[lotPrices.length-1]:(o?.max_price??null),
-      lots:lotsCount,
-      totalAmount:totalAmount>0?totalAmount:null,
-      minAmount:minLot?.amount??null,
-      minTotalPrice:minLot?.price!=null && minLot?.amount!=null ? Math.round(minLot.price*minLot.amount) : null,
-      minUnitPrice:minLot?.price??minP,
-      minQlt, minPtn,
-      qltLabel:qltLabel(minQlt),
-      histMedian:ref,
-      histSource:refSource,
-      histCount:refCount,
-      dataOk,
-      avgAll:sa.avgAll,
-      avg7d:sa.avg7d,
-      avgToday:sa.avgToday,
-      avgYesterday:sa.avgYesterday,
-      salesCount:sa.salesCount,
-      sales7d:sa.sales7d,
-      salesToday:sa.salesToday,
-      salesYesterday:sa.salesYesterday,
-      lastSale,
-      changeVsLast,
-      status,statusLabel,
-      profit,profitPct,
-      ts:o?.ts||null
-    };
-  });
-  res.json({updated:lastScan,rows});
+// Client reports favorites / watched items for scan priority
+app.post("/api/priority",(req,res)=>{
+  try{
+    const ids=Array.isArray(req.body?.ids)?req.body.ids:String(req.body?.ids||"").split(",");
+    const weight=Math.max(1, Math.min(100, Number(req.body?.weight)||10));
+    const now=new Date().toISOString();
+    const ups=DB.prepare("INSERT INTO priority_items(id,weight,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at");
+    const tx=DB.transaction(list=>{
+      for(const raw of list){
+        const id=String(raw||"").trim();
+        if(!id || id.length>80) continue;
+        ups.run(id, weight, now);
+      }
+    });
+    tx(ids.slice(0,150));
+    // prune stale priority older than 24h with low weight
+    try{ DB.prepare("DELETE FROM priority_items WHERE updated_at < datetime('now','-1 day') AND weight < 20").run(); }catch{}
+    res.json({ok:true, count:DB.prepare("SELECT count(*) n FROM priority_items").get().n});
+  }catch(e){
+    res.status(500).json({ok:false,error:e.message});
+  }
 });
 
 app.get("/api/item/:id",async(req,res)=>{
@@ -546,13 +706,16 @@ fs.mkdirSync(ICONS_DIR, { recursive: true });
 
 app.get("/api/item/:id/live",async(req,res)=>{
   const id=String(req.params.id);
+  liveBusy.add(id);
   try{
     const lots=await fetchAllLots(id);
     saveLots(id,lots,new Date().toISOString());
-    res.json({ok:true,id,lots:lots.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null});
+    res.json({ok:true,id,lots:lots.map(x=>({...x,totalPrice:Math.round(x.price*x.amount),qlt:x.qlt,ptn:x.ptn,created_at:x.created})),lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,ts:new Date().toISOString()});
   }catch(e){
     const cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(id);
-    res.json({ok:false,id,lots:cached.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,error:e.message});
+    res.json({ok:false,id,lots:cached.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,error:e.message});
+  }finally{
+    setTimeout(()=>liveBusy.delete(id), 2000);
   }
 });
 
@@ -610,4 +773,16 @@ app.listen(PORT,()=>console.log(`STALZONE Market Monitor: http://localhost:${POR
     scanCycle().catch(e=>lastError=e.message);
   }catch(e){lastError=e.message}
 })();
-setInterval(()=>scanCycle().catch(e=>lastError=e.message),POLL_MS);
+
+// Adaptive scheduler: uses currentPollMs which grows on API errors
+(function scheduleScan(){
+  setTimeout(async()=>{
+    try{ await scanCycle(); }catch(e){ lastError=e.message; }
+    scheduleScan();
+  }, Math.max(10000, currentPollMs||POLL_MS));
+})();
+
+// Periodic WAL checkpoint
+setInterval(()=>{
+  try{ DB.pragma("wal_checkpoint(TRUNCATE)"); }catch{}
+}, 15*60*1000);

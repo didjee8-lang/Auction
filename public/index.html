@@ -400,6 +400,10 @@ let templates=JSON.parse(localStorage.getItem("sz_tpls")||"[]");
 let activeTpl=localStorage.getItem("sz_tpl_active")||"";
 let catIcons={};
 let itemRefreshTimer=null;
+let marketSince=null;
+let fullLoadAt=0;
+let prioritySentAt=0;
+
 function saveFavs(){localStorage.setItem("sz_favs",JSON.stringify(favIds))}
 function saveExcl(){localStorage.setItem("sz_excl",JSON.stringify(excludeIds))}
 function saveCats(){localStorage.setItem("sz_cats",JSON.stringify(selectedCats))}
@@ -1293,30 +1297,105 @@ function isCalcInputFocused(){
   const el=document.activeElement;
   return !!(el&&el.matches&&el.matches('#calcBody input[data-qty-id],#calcBody input[data-price-id],#calcQ,#scPrice,#scQty,#lotPriceFilter,#huntQ,#huntPrice,#q,#catQ'));
 }
-async function load(){try{
-    const j=await(await fetch("/api/market",{cache:"no-store"})).json();
-    rows=j.rows||[];
+function mergeRows(incoming, full){
+  if(full || !rows.length){
+    rows=incoming||[];
+    return;
+  }
+  const map=new Map(rows.map(r=>[r.id,r]));
+  for(const r of (incoming||[])){
+    map.set(r.id, {...(map.get(r.id)||{}), ...r});
+  }
+  rows=[...map.values()];
+}
+function patchCardDom(r){
+  const el=document.querySelector(`.pcard[data-id="${CSS.escape(r.id)}"]`);
+  if(!el) return false;
+  const priceEl=el.querySelector(".pcard-price");
+  const qtyEl=el.querySelector(".pcard-qty");
+  const profitEl=el.querySelector(".pcard-profit");
+  const statusEl=el.querySelector(".pcard-status");
+  if(priceEl) priceEl.innerHTML=`${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`;
+  if(qtyEl) qtyEl.innerHTML=`<b>${fmtN(r.lots)} лот.</b>`;
+  if(profitEl && r.profit!=null){
+    profitEl.className="pcard-profit "+(r.profit>=0?"pos":"neg");
+    profitEl.textContent=`${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)`;
+  }
+  if(statusEl) statusEl.innerHTML=statusBadge(r);
+  el.classList.toggle("cheap", r.status==="cheap");
+  el.classList.toggle("expensive", r.status==="expensive");
+  el.classList.toggle("active", r.id===activeId);
+  return true;
+}
+function pushPriority(){
+  const now=Date.now();
+  if(now-prioritySentAt<20000) return;
+  prioritySentAt=now;
+  const ids=[...new Set([...(favIds||[]), ...(activeId?[activeId]:[])])].slice(0,100);
+  if(!ids.length) return;
+  fetch("/api/priority",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids,weight:15})}).catch(()=>{});
+}
+async function load(forceFull=false){try{
+    const now=Date.now();
+    const needFull=forceFull || !rows.length || !marketSince || (now-fullLoadAt>120000);
+    let j;
+    if(needFull){
+      j=await(await fetch("/api/market",{cache:"no-store"})).json();
+      mergeRows(j.rows||[], true);
+      fullLoadAt=now;
+    }else{
+      j=await(await fetch("/api/market/delta?since="+encodeURIComponent(marketSince),{cache:"no-store"})).json();
+      if(j.full){
+        mergeRows(j.rows||[], true);
+        fullLoadAt=now;
+      }else{
+        mergeRows(j.rows||[], false);
+        // try patch cards without full rebuild when filter is simple
+        const canPatch=filter==="all"&&!($("q").value||"").trim()&&!selectedCats.length&&sortBy!=="profit";
+        if(canPatch && (j.rows||[]).length && (j.rows||[]).length<80){
+          let patched=0;
+          for(const r of j.rows){ if(patchCardDom(r)) patched++; }
+          if(patched===j.rows.length){
+            // still refresh favs/hunt which are light
+            const scrollState=saveScrollState();
+            renderFavs();renderHunt();
+            if(rightTab==="calc"&&!isCalcInputFocused()) recalcCalc();
+            else if(rightTab==="calc"&&isCalcInputFocused()){ persistVisibleCalcInputs(); recalcCalc(); }
+            requestAnimationFrame(()=>restoreScrollState(scrollState));
+            if(j.updated) marketSince=j.updated;
+            pushPriority();
+            return;
+          }
+        }
+      }
+    }
+    if(j.updated) marketSince=j.updated;
+
     const scrollState=saveScrollState();
     const keepCalc=rightTab==="calc"&&isCalcInputFocused();
     if(keepCalc)persistVisibleCalcInputs();
     renderCatChips();renderTplBar();
-    if(!isCalcInputFocused()||rightTab!=="calc"){
-      // avoid layout thrash while typing in calculator
-    }
     renderCards();renderFavs();renderHunt();
     if(rightTab==="catalog")renderCatalog();
     if(rightTab==="calc"){
-      if(keepCalc){
-        // only update summary numbers, do not rebuild inputs
-        recalcCalc();
-      }else{
-        renderCalc();
-      }
+      if(keepCalc) recalcCalc();
+      else renderCalc();
     }
     refreshFavoriteLots();
+    pushPriority();
     requestAnimationFrame(()=>restoreScrollState(scrollState));
-  }catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
-async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
+  }catch(e){
+    if(!rows.length) $("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`;
+  }
+}
+async function updateStatus(){try{const j=await(await fetch("/api/status")).json();
+  let st=j.scanning?"сканирование…":"готово";
+  if(j.apiFailStreak>=3) st="API пауза";
+  $("st").textContent=st;
+  $("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";
+  $("cnt").textContent=j.itemCount||0;
+  $("lotCnt").textContent=j.lotItems||0;
+}catch{}}
 $("q").oninput=()=>renderCards();
 $("huntQ").oninput=renderHunt;$("huntPrice").oninput=renderHunt;
 $("catQ").oninput=()=>{catFilter=$("catQ").value;renderCatalog()};
@@ -1346,9 +1425,9 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
   if(rightTab==="catalog")renderCatalog();
   if(rightTab==="calc")renderCalc();
 }});
-$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
+$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load(true);$("scanBtn").disabled=false},1500)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
-load();updateStatus();setInterval(load,15000);setInterval(refreshFavoriteLots,1500);setInterval(updateStatus,3000);
+load(true);updateStatus();setInterval(()=>load(false),12000);setInterval(refreshFavoriteLots,2000);setInterval(updateStatus,4000);setInterval(pushPriority,60000);
 </script>
 </body>
 </html>
