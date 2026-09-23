@@ -866,20 +866,30 @@ function saveCalc(){
     localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));localStorage.setItem("sz_calc_total_sell_prices",JSON.stringify(calcTotalSellPrices));localStorage.setItem("sz_calc_total_sell_qty",JSON.stringify(calcTotalSellQty));
   }catch{}
 }
-function persistVisibleCalcInputs(){
-  const state=calcState();
-  document.querySelectorAll('#calcBody input[data-price-id]').forEach(inp=>{
-    const id=inp.dataset.priceId,raw=String(inp.value??'');
-    if(raw.trim())state.prices[id]=raw; else delete state.prices[id];
+function calcStoresFor(mode){
+  if(mode==="buy") return {prices:calcBuyPrices, qty:calcBuyQty};
+  if(mode==="sell") return {prices:calcSellPrices, qty:calcSellQty};
+  return {prices:calcTotalSellPrices, qty:calcTotalSellQty};
+}
+/** Save DOM inputs into the store of the mode they belong to (data-mode on #calcBody). Never cross-write buy↔sell. */
+function persistVisibleCalcInputs(explicitMode){
+  const body=$("calcBody");
+  const mode=explicitMode || (body && body.dataset.mode) || calcMode;
+  if(!mode) return;
+  const state=calcStoresFor(mode);
+  if(!body) { saveCalc(); return; }
+  body.querySelectorAll('input[data-price-id]').forEach(inp=>{
+    const id=inp.dataset.priceId, raw=String(inp.value??'');
+    if(raw.trim()) state.prices[id]=raw; else delete state.prices[id];
   });
-  document.querySelectorAll('#calcBody input[data-qty-id]').forEach(inp=>{
-    const id=inp.dataset.qtyId,raw=String(inp.value??'');
-    if(raw.trim())state.qty[id]=raw; else delete state.qty[id];
+  body.querySelectorAll('input[data-qty-id]').forEach(inp=>{
+    const id=inp.dataset.qtyId, raw=String(inp.value??'');
+    if(raw.trim()) state.qty[id]=raw; else delete state.qty[id];
   });
   saveCalc();
 }
 function calcNum(v){if(v==null)return NaN;const s=String(v).replace(/\s+/g,"").replace(/,/g,".");return s===""?NaN:Number(s)}
-function calcState(){if(calcMode==="buy")return{prices:calcBuyPrices,qty:calcBuyQty};if(calcMode==="sell")return{prices:calcSellPrices,qty:calcSellQty};return{prices:calcTotalSellPrices,qty:calcTotalSellQty}}
+function calcState(){ return calcStoresFor(calcMode); }
 function recalcCalc(){
   const state=calcState();let totalBuy=0,totalPlayer=0,totalAuction=0,hasBuy=false,hasSale=false;const details=[];
   for(const id of calcIds){const r=rows.find(x=>x.id===id)||{id,name:id},price=calcNum(state.prices[id]),qty=calcNum(state.qty[id]);const vq=Number.isFinite(qty)&&qty>0,vp=Number.isFinite(price)&&price>=0;let unit=NaN,player=NaN,auction=NaN,commission=NaN;
@@ -894,9 +904,13 @@ function recalcCalc(){
   $("sumBuy").textContent=hasBuy?fmt(totalBuy):'—';$("sumPlayer").textContent=hasSale?fmt(totalPlayer):'—';$("sumAuctionNet").textContent=hasSale?fmt(totalAuction):'—';$("calcDetails").innerHTML=details.join('');
 }
 function updateCalcMode(){const buy=calcMode==="buy",sell=calcMode==="sell",total=calcMode==="totalSell";$("calcBuyMode").classList.toggle('active',buy);$("calcSellMode").classList.toggle('active',sell);$("calcTotalSellMode").classList.toggle('active',total);$("calcModeHint").textContent=buy?'Покупка: общая цена ÷ количество':sell?'Продажа: цена за 1 шт. × количество':'Общ. продажа: общая цена ÷ количество, аукцион −5%';$("calcHead").innerHTML=buy?'<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>':sell?'<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>':'<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>';$("calcBuySummary").style.display=buy?'block':'none';$("calcSellSummary").style.display=buy?'none':'block'}
-function renderCalc(){
-  // Always persist current DOM values first (separate stores per mode).
-  persistVisibleCalcInputs();
+function renderCalc(opts){
+  const skipPersist=!!(opts&&opts.skipPersist);
+  // Persist only into the mode the DOM currently represents — never into the target mode.
+  if(!skipPersist){
+    const domMode=$("calcBody")?.dataset?.mode;
+    if(domMode) persistVisibleCalcInputs(domMode);
+  }
   const focused=document.activeElement;
   const isFocused=focused&&focused.matches&&focused.matches('#calcBody input[data-qty-id],#calcBody input[data-price-id]');
   const restore=isFocused?{
@@ -915,6 +929,7 @@ function renderCalc(){
     const same=existing.length===calcIds.length && calcIds.every((id,i)=>existing[i]===id);
     if(same){
       updateCalcMode();
+      if($("calcBody")) $("calcBody").dataset.mode=calcMode;
       recalcCalc();
       return;
     }
@@ -924,6 +939,7 @@ function renderCalc(){
   const state=calcState();
   if(!calcIds.length){
     $("calcBody").innerHTML=`<tr><td colspan="${calcMode==='buy'?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
+    $("calcBody").dataset.mode=calcMode;
     $("calcDetails").innerHTML='';
     recalcCalc();
     return;
@@ -936,6 +952,7 @@ function renderCalc(){
     if(calcMode==='sell')return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт."></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-player">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
     return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td><td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена"></td><td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество"></td><td class="calc-unit">—</td><td class="calc-auction">—</td><td><button class="rm" data-id="${esc(id)}">×</button></td></tr>`;
   }).join('');
+  $("calcBody").dataset.mode=calcMode;
   $("calcBody").querySelectorAll('input[data-price-id]').forEach(inp=>inp.oninput=()=>{
     const id=inp.dataset.priceId,state=calcState(),raw=inp.value.replace(/[^0-9.,]/g,'');
     if(raw!==inp.value)inp.value=raw;
@@ -1402,9 +1419,16 @@ $("catQ").oninput=()=>{catFilter=$("catQ").value;renderCatalog()};
 $("catBack").onclick=()=>showCatList();
 $("closeBtn").onclick=closeDrawer;$("overlay").onclick=closeDrawer;
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classList.contains("open"))closeDrawer()});
-$("calcBuyMode").onclick=()=>{persistVisibleCalcInputs();calcMode="buy";saveCalc();renderCalc()};
-$("calcSellMode").onclick=()=>{persistVisibleCalcInputs();calcMode="sell";saveCalc();renderCalc()};
-$("calcTotalSellMode").onclick=()=>{persistVisibleCalcInputs();calcMode="totalSell";saveCalc();renderCalc()};
+function switchCalcMode(next){
+  const domMode=$("calcBody")?.dataset?.mode || calcMode;
+  persistVisibleCalcInputs(domMode); // save current fields into THEIR mode only
+  calcMode=next;
+  saveCalc();
+  renderCalc({skipPersist:true}); // rebuild from the target mode store, do not copy DOM into it
+}
+$("calcBuyMode").onclick=()=>switchCalcMode("buy");
+$("calcSellMode").onclick=()=>switchCalcMode("sell");
+$("calcTotalSellMode").onclick=()=>switchCalcMode("totalSell");
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
