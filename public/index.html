@@ -298,7 +298,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
     display:flex;flex-direction:column;gap:8px;
     position:fixed;top:0;right:0;bottom:0;width:min(280px,85vw);
     background:var(--panel);border-left:1px solid var(--border);
-    z-index:50;padding:56px 14px 14px;
+    z-index:60;padding:56px 14px 14px;
     box-shadow:-12px 0 40px rgba(0,0,0,.6);
     transform:translateX(100%);transition:transform .2s ease;
   }
@@ -329,7 +329,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   .hunt{padding:6px 8px}
   .filter-bar{padding:4px 8px}
   body.mobile-nav-open::after{
-    content:"";position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:49;
+    content:"";position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:55;
   }
 }
 @media(max-width:480px){
@@ -371,6 +371,22 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   html,body{height:100%;height:100dvh;overflow:hidden}
   .main{flex:1;min-height:0;overflow:hidden}
   body{min-height:100dvh}
+}
+
+
+.mobile-right-bar{display:none}
+.mobile-nav-btn-in{border-color:var(--neon);color:var(--neon2)}
+@media(max-width:800px){
+  .mobile-right-bar{
+    display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;order:-1;
+  }
+  .mobile-right-bar .btn{flex:1;justify-content:center;padding:10px 12px;font-size:14px;font-weight:600}
+  /* Right pane below top chrome so site header stays reachable; still full usable height */
+  .main.mobile-right > .pane:last-child{
+    top:0;padding-top:env(safe-area-inset-top,0);
+    /* leave space: use full screen but bar has back+menu */
+  }
+  #rightHead{flex-wrap:wrap}
 }
 
 </style>
@@ -428,6 +444,10 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   </div>
   <div class="pane">
     <div class="pane-head" id="rightHead">
+      <div class="mobile-right-bar" id="mobileRightBar">
+        <button type="button" class="btn" id="mobileBackAuction">← Аукцион</button>
+        <button type="button" class="btn mobile-nav-btn-in" id="mobileNavBtn2">☰ Меню</button>
+      </div>
       <div class="tabs" id="mainTabs">
         <div class="tab active" data-tab="catalog">Каталог</div>
         <div class="tab" data-tab="calc">Калькулятор</div>
@@ -1659,12 +1679,17 @@ function setMobileView(tab){
   });
   closeMobileNav();
 }
-const _mNavBtn=$("mobileNavBtn");
-if(_mNavBtn)_mNavBtn.onclick=()=>{
+function toggleMobileNav(){
   const sheet=$("mobileNavSheet");
   if(sheet && !sheet.hidden && sheet.classList.contains("open")) closeMobileNav();
   else openMobileNav();
-};
+}
+const _mNavBtn=$("mobileNavBtn");
+if(_mNavBtn)_mNavBtn.onclick=toggleMobileNav;
+const _mNavBtn2=$("mobileNavBtn2");
+if(_mNavBtn2)_mNavBtn2.onclick=toggleMobileNav;
+const _mBack=$("mobileBackAuction");
+if(_mBack)_mBack.onclick=()=>setMobileView("auction");
 const _mNavClose=$("mobileNavClose");
 if(_mNavClose)_mNavClose.onclick=closeMobileNav;
 document.querySelectorAll(".mobile-nav-item").forEach(btn=>{
@@ -1672,7 +1697,10 @@ document.querySelectorAll(".mobile-nav-item").forEach(btn=>{
 });
 document.addEventListener("click",e=>{
   if(!isMobile())return;
-  if(document.body.classList.contains("mobile-nav-open") && !e.target.closest("#mobileNavSheet") && !e.target.closest("#mobileNavBtn")){
+  if(document.body.classList.contains("mobile-nav-open")
+    && !e.target.closest("#mobileNavSheet")
+    && !e.target.closest("#mobileNavBtn")
+    && !e.target.closest("#mobileNavBtn2")){
     closeMobileNav();
   }
 });
