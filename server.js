@@ -289,16 +289,22 @@ async function fetchAllLots(itemId){
 
 function saveLots(itemId,lots,now=new Date().toISOString()){
   const ins=DB.prepare(`INSERT OR REPLACE INTO lots(item_id,lot_id,price,amount,created_at,raw,seen_at,qlt,ptn) VALUES(?,?,?,?,?,?,?,?,?)`);
+  const getPrev=DB.prepare(`SELECT lot_id, seen_at, created_at FROM lots WHERE item_id=?`);
   const delMissing=DB.prepare(`DELETE FROM lots WHERE item_id=? AND lot_id NOT IN (SELECT value FROM json_each(?))`);
   const delAll=DB.prepare(`DELETE FROM lots WHERE item_id=?`);
   const tx=DB.transaction(a=>{
     if(!a.length){ delAll.run(itemId); return; }
+    // Preserve seen_at for lots that already existed — only NEW lot_ids get "now".
+    // Otherwise every scan bumps all rarities to the top together.
+    const prevRows=getPrev.all(itemId);
+    const prevSeen=new Map(prevRows.map(r=>[r.lot_id, r.seen_at]));
     const ids=a.map(x=>x.id);
-    for(const x of a)ins.run(itemId,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),now,x.qlt,x.ptn);
-    // remove lots that disappeared
+    for(const x of a){
+      const seen=prevSeen.has(x.id) ? (prevSeen.get(x.id)||now) : now;
+      ins.run(itemId,x.id,x.price,x.amount,x.created,x.raw||JSON.stringify(x),seen,x.qlt,x.ptn);
+    }
     try { delMissing.run(itemId, JSON.stringify(ids)); }
     catch {
-      // fallback if json_each unavailable
       const keep=new Set(ids);
       const existing=DB.prepare("SELECT lot_id FROM lots WHERE item_id=?").all(itemId);
       const rm=DB.prepare("DELETE FROM lots WHERE item_id=? AND lot_id=?");
@@ -309,7 +315,7 @@ function saveLots(itemId,lots,now=new Date().toISOString()){
   const prices=lots.map(x=>x.price).filter(p=>p>0).sort((a,b)=>a-b);
   DB.prepare(`INSERT OR REPLACE INTO price_observations(item_id,ts,min_price,avg_price,max_price,lots,sales) VALUES(?,?,?,?,?,?,0)`)
     .run(itemId,now,prices[0]||null,prices.length?prices.reduce((a,b)=>a+b,0)/prices.length:null,prices.length?prices[prices.length-1]:null,lots.length);
-  marketCache.at=0; // invalidate
+  marketCache.at=0;
   return prices;
 }
 
@@ -507,7 +513,7 @@ app.post("/api/scan",async(_,res)=>{
 
 function buildMarketRow(x){
   const getLast=DB.prepare(`SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1`);
-  const getLots=DB.prepare(`SELECT price, amount, qlt, ptn FROM lots WHERE item_id=? ORDER BY price ASC`);
+  const getLots=DB.prepare(`SELECT price, amount, qlt, ptn, created_at, seen_at FROM lots WHERE item_id=? ORDER BY price ASC`);
   const o=getLast.get(x.id);
   const lotRows=getLots.all(x.id);
   const lotsCount=lotRows.length;
@@ -599,7 +605,19 @@ function buildMarketRow(x){
     changeVsLast,
     status,statusLabel,
     profit,profitPct,
-    ts:o?.ts||null
+    ts: (()=>{
+      // Prefer newest lot listing time over observation scan time
+      let best=0, bestIso=null;
+      for(const l of lotRows){
+        for(const key of ["created_at","seen_at"]){
+          const v=l[key];
+          if(!v) continue;
+          const t=new Date(v).getTime();
+          if(Number.isFinite(t) && t>best){ best=t; bestIso=typeof v==="string"?v:new Date(t).toISOString(); }
+        }
+      }
+      return bestIso || o?.ts || null;
+    })()
   };
 }
 
@@ -685,14 +703,21 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     lastSale,
     changeVsLast: (minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null,
     status, statusLabel, profit, profitPct,
-    // Real scan time — NOT "now", otherwise variants always pin to top of auction
+    // Per-rarity time: newest lot of THIS qlt only (created_at or when first seen).
+    // Listing a "редкое" must not push "обычное"/"особое" of the same item to the top.
     ts: (()=>{
+      let best=0, bestIso=null;
+      for(const l of fakeLots){
+        for(const key of ["created_at","seen_at"]){
+          const v=l[key];
+          if(!v) continue;
+          const t=new Date(v).getTime();
+          if(Number.isFinite(t) && t>best){ best=t; bestIso=typeof v==="string"?v:new Date(t).toISOString(); }
+        }
+      }
+      if(bestIso) return bestIso;
       try {
-        const o=DB.prepare("SELECT ts FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1").get(baseItem.id);
-        if(o?.ts) return o.ts;
-      } catch {}
-      try {
-        const s=DB.prepare("SELECT MAX(seen_at) AS ts FROM lots WHERE item_id=?").get(baseItem.id);
+        const s=DB.prepare("SELECT MAX(COALESCE(created_at,seen_at)) AS ts FROM lots WHERE item_id=? AND qlt IS ?").get(baseItem.id, qlt);
         if(s?.ts) return s.ts;
       } catch {}
       return null;
@@ -707,7 +732,7 @@ function getMarketRows(force=false){
     return {updated:marketCache.updated||lastScan, rows:marketCache.rows};
   }
   const items=DB.prepare("SELECT * FROM items ORDER BY name").all();
-  const getLots=DB.prepare(`SELECT price, amount, qlt, ptn FROM lots WHERE item_id=? ORDER BY price ASC`);
+  const getLots=DB.prepare(`SELECT price, amount, qlt, ptn, created_at, seen_at FROM lots WHERE item_id=? ORDER BY price ASC`);
   const rows=[];
   for(const x of items){
     const lotRows=getLots.all(x.id);
