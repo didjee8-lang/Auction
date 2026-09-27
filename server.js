@@ -897,11 +897,27 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
   };
 }
 
+function ensureCriticalItemsInDb(){
+  const ins = DB.prepare(`INSERT INTO items(id,name,category,rarity,icon) VALUES(?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name, category=excluded.category`);
+  for (const [id, meta] of Object.entries(FALLBACK_ITEMS)) {
+    ins.run(id, meta.name, meta.category, "", null);
+  }
+  try {
+    const ups = DB.prepare("INSERT INTO priority_items(id,weight,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at");
+    const now = new Date().toISOString();
+    for (const id of ALWAYS_PRIORITY) ups.run(id, 80, now);
+  } catch {}
+}
+
 function getMarketRows(force=false){
   const now=Date.now();
   if(!force && marketCache.rows && (now-marketCache.at)<MARKET_CACHE_MS){
     return {updated:marketCache.updated||lastScan, rows:marketCache.rows};
   }
+  // Guarantee season pass / protoartifact exist in DB every market build
+  try { ensureCriticalItemsInDb(); } catch (e) { console.warn("ensureCritical", e.message); }
+
   const items=DB.prepare("SELECT * FROM items ORDER BY name").all();
   const getLots=DB.prepare(`SELECT price, amount, qlt, ptn, created_at, seen_at FROM lots WHERE item_id=? ORDER BY price ASC`);
   const prioIds=new Set(ALWAYS_PRIORITY);
@@ -909,7 +925,9 @@ function getMarketRows(force=false){
     for (const r of DB.prepare("SELECT id FROM priority_items").all()) prioIds.add(r.id);
   } catch {}
   const rows=[];
+  const seenIds=new Set();
   for(const x of items){
+    seenIds.add(x.id);
     const lotRows=getLots.all(x.id);
     // Group by qlt (null → treat as 0 for grouping display if any qlt present)
     const byQlt=new Map();
@@ -937,9 +955,16 @@ function getMarketRows(force=false){
     } else {
       const row=buildMarketRow(x);
       row.priority=prioIds.has(x.id);
-      // Always keep priority trade goods in the feed even with 0 lots
       rows.push(row);
     }
+  }
+  // Inject any critical items missing from items table response
+  for (const [id, meta] of Object.entries(FALLBACK_ITEMS)) {
+    if (seenIds.has(id)) continue;
+    const fake={ id, name: meta.name, category: meta.category, rarity: "", icon: null };
+    const row=buildMarketRow(fake);
+    row.priority=true;
+    rows.push(row);
   }
   marketCache={at:now, rows, updated:lastScan};
   return {updated:lastScan, rows};
