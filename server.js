@@ -276,26 +276,117 @@ async function fetchListingFromSources(){
   return [...byId.values()];
 }
 
+function loadLocalCatalog(){
+  const candidates = [
+    path.join(__dirname, "items_catalog.json"),
+    path.join(__dirname, "public", "items_catalog.json"),
+    path.join(DATA_DIR, "items_catalog.json"),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const raw = fs.readFileSync(p, "utf8");
+      const list = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+      if (Array.isArray(list) && list.length) {
+        console.log(`Local catalog loaded: ${p} (${list.length})`);
+        return list.map(x => ({
+          id: String(x.id || ""),
+          name: String(x.name || x.id || ""),
+          category: String(x.category || ""),
+          rarity: String(x.rarity || x.color || ""),
+        })).filter(x => x.id);
+      }
+    } catch (e) {
+      console.warn("local catalog skip", p, e.message);
+    }
+  }
+  return [];
+}
+
+async function fetchGithubItemIds(){
+  try {
+    const r = await fetch("https://api.github.com/repos/EXBO-Studio/stalzone-database/git/trees/main?recursive=1", {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "stalzone-market-monitor" },
+    });
+    if (!r.ok) { console.warn("github tree", r.status); return []; }
+    const j = await r.json();
+    const out = [];
+    for (const t of (j.tree || [])) {
+      const p = t.path || "";
+      if (!p.startsWith("ru/items/") || !p.endsWith(".json") || p.includes("/_variants/") || t.type !== "blob") continue;
+      const id = p.slice(p.lastIndexOf("/") + 1, -5);
+      if (!id || id.startsWith("_")) continue;
+      const parts = p.split("/");
+      const category = parts.slice(2, -1).join("/");
+      out.push({ id, name: id, category, rarity: "" });
+    }
+    console.log(`GitHub tree ids: ${out.length}`);
+    return out;
+  } catch (e) {
+    console.warn("github tree error", e.message);
+    return [];
+  }
+}
+
 async function syncItems(){
   console.log("Syncing items from multiple sources ...");
-  const list = await fetchListingFromSources();
+  const byId = new Map();
+  const add = (rows) => {
+    for (const x of rows || []) {
+      if (!x?.id) continue;
+      const id = String(x.id);
+      const prev = byId.get(id);
+      const name = String(x.name || id);
+      // Prefer human names over bare ids
+      if (!prev || (prev.name === prev.id && name !== id) || (name && name !== id && prev.name === id)) {
+        byId.set(id, {
+          id,
+          name: name || id,
+          category: String(x.category || prev?.category || ""),
+          rarity: String(x.rarity || x.color || prev?.rarity || ""),
+        });
+      } else if (prev && !prev.category && x.category) {
+        prev.category = String(x.category);
+      }
+    }
+  };
+
+  // 1) Local snapshot (full catalog shipped with app)
+  add(loadLocalCatalog());
+  // 2) Live listing.json mirrors
+  add(await fetchListingFromSources());
+  // 3) Official GitHub tree (all base item ids)
+  add(await fetchGithubItemIds());
+  // 4) Hard fallback trade goods (season pass etc. — not always in GitHub tree)
+  add(Object.entries(FALLBACK_ITEMS).map(([id, meta]) => ({ id, name: meta.name, category: meta.category, rarity: "" })));
+
+  const list = [...byId.values()];
   if (!list.length) throw new Error("No items from any listing source");
+
   const ins = DB.prepare(`INSERT INTO items(id,name,category,rarity,icon) VALUES(?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name, category=excluded.category, rarity=excluded.rarity`);
   const tx = DB.transaction((rows) => {
     for (const x of rows) {
-      if (!x.id) continue;
       ins.run(x.id, x.name || x.id, x.category || "", x.rarity || "", null);
-    }
-    // Always upsert fallback trade goods (overwrite name if missing)
-    for (const [id, meta] of Object.entries(FALLBACK_ITEMS)) {
-      ins.run(id, meta.name, meta.category, "", null);
     }
   });
   tx(list);
+
+  // Re-seed priority every sync
+  try {
+    const ups = DB.prepare("INSERT INTO priority_items(id,weight,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at");
+    const now = new Date().toISOString();
+    for (const id of ALWAYS_PRIORITY) ups.run(id, 80, now);
+  } catch (e) { console.warn("priority reseed:", e.message); }
+
   const n = DB.prepare("SELECT count(*) n FROM items").get().n;
   DB.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('items_synced_at',?)").run(new Date().toISOString());
-  console.log(`Items synced: ${n} (sources + fallback)`);
+  console.log(`Items synced: ${n} (local+listing+github+fallback)`);
+  // Log critical items presence
+  for (const id of ["8AjTFOVB", "cpe1d8xz", "kJD59qaP", "rdt1m5ve"]) {
+    const row = DB.prepare("SELECT id,name FROM items WHERE id=?").get(id);
+    console.log(`  critical ${id}:`, row ? row.name : "MISSING");
+  }
 }
 
 function parseLots(j){
@@ -614,6 +705,21 @@ app.get("/api/status",(_,res)=>res.json({
 app.post("/api/items/sync",async(_,res)=>{
   try{await syncItems();res.json({ok:true,count:DB.prepare("SELECT count(*) n FROM items").get().n})}
   catch(e){res.status(500).json({ok:false,error:e.message})}
+});
+
+// Debug / catalog search — always returns DB items (incl. season pass without lots)
+app.get("/api/items",(req,res)=>{
+  try{
+    const q=String(req.query.q||"").trim().toLowerCase();
+    let rows;
+    if(q){
+      rows=DB.prepare("SELECT id,name,category,rarity FROM items WHERE lower(name) LIKE ? OR lower(id) LIKE ? ORDER BY name LIMIT 200")
+        .all(`%${q}%`,`%${q}%`);
+    }else{
+      rows=DB.prepare("SELECT id,name,category,rarity FROM items ORDER BY name LIMIT 500").all();
+    }
+    res.json({ok:true,count:rows.length,total:DB.prepare("SELECT count(*) n FROM items").get().n,rows});
+  }catch(e){res.status(500).json({ok:false,error:e.message})}
 });
 
 app.post("/api/scan",async(_,res)=>{
