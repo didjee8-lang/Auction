@@ -97,13 +97,47 @@ let apiFailStreak = 0;
 let currentPollMs = POLL_MS;
 const liveBusy = new Set(); // item ids currently being live-fetched by UI
 
-// Always-scan popular trade goods (incl. Протоартефакт)
-const ALWAYS_PRIORITY = ["rdt1m5ve","55VrA59M","WdVYNOia","nb0OaSNs","rA8fsgH1","skuTyVhI","vKJbSN93","vpxznHgV"];
+// Always-scan popular trade goods (протоартефакты + сезонный пропуск)
+const ALWAYS_PRIORITY = [
+  "rdt1m5ve", // Протоартефакт
+  "55VrA59M","WdVYNOia","nb0OaSNs","rA8fsgH1","skuTyVhI","vKJbSN93","vpxznHgV",
+  "8AjTFOVB", // Сезонный Пропуск
+  "cpe1d8xz", // Сезонный Пропуск + 50 уровней
+  "kJD59qaP", // Сезонный Пропуск + 20 уровней
+];
 try {
   const ups = DB.prepare("INSERT INTO priority_items(id,weight,updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET weight=excluded.weight, updated_at=excluded.updated_at");
   const now = new Date().toISOString();
   for (const id of ALWAYS_PRIORITY) ups.run(id, 50, now);
 } catch (e) { console.warn("priority seed:", e.message); }
+
+/** Market ref: median of last 5 sales of the same rarity (qlt). No fallback to lots/all-time.
+ *  If fewer than 5 sales → no market (ref = min lot, dataOk=false, no "cheap/expensive"). */
+function marketRefFromLast5Sales(itemId, qlt, ptn){
+  let saleGroup=[];
+  try {
+    if(qlt!=null){
+      saleGroup=DB.prepare(`
+        SELECT price, amount, ts FROM sale_observations
+        WHERE item_id=? AND price>0
+          AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+        ORDER BY datetime(ts) DESC LIMIT 5
+      `).all(itemId, qlt, qlt);
+    } else {
+      saleGroup=DB.prepare(`
+        SELECT price, amount, ts FROM sale_observations
+        WHERE item_id=? AND price>0
+        ORDER BY datetime(ts) DESC LIMIT 5
+      `).all(itemId);
+    }
+  } catch { saleGroup=[]; }
+  // Use unit prices of last 5 sale events (not weighted by amount — each deal counts once)
+  const prices=saleGroup.map(s=>Number(s.price)).filter(p=>p>0);
+  if(prices.length>=5){
+    return { ref: medianOf(prices), refSource: "last5_sales_qlt", refCount: prices.length, dataOk: true };
+  }
+  return { ref: null, refSource: "none", refCount: prices.length, dataOk: false };
+}
 
 let marketCache = { at: 0, rows: null, updated: null };
 const MARKET_CACHE_MS = 2500;
@@ -182,6 +216,24 @@ async function syncItems(){
     }
   });
   tx(list);
+  // Ensure always-priority trade items exist even if listing lags
+  const FALLBACK_NAMES = {
+    rdt1m5ve: ["Протоартефакт", "other/useful"],
+    "8AjTFOVB": ["Сезонный Пропуск", "other/useful"],
+    cpe1d8xz: ["Сезонный Пропуск + 50 уровней", "other/useful"],
+    kJD59qaP: ["Сезонный Пропуск + 20 уровней", "other/useful"],
+    "55VrA59M": ["Протоартефакт «Омута»", "other/trash"],
+    WdVYNOia: ["Протоартефакт «Батута»", "other/trash"],
+    nb0OaSNs: ["Протоартефакт «Застоя»", "other/trash"],
+    rA8fsgH1: ["Протоартефакт «Холодца»/«Пуха»", "other/trash"],
+    skuTyVhI: ["Протоартефакт «Разряда»/«Застоя»", "other/trash"],
+    vKJbSN93: ["Протоартефакт «Зажигалки»/Мороза", "other/trash"],
+    vpxznHgV: ["Протоартефакт «Волчка»", "other/trash"],
+  };
+  for (const [id, [name, cat]] of Object.entries(FALLBACK_NAMES)) {
+    const exists = DB.prepare("SELECT id FROM items WHERE id=?").get(id);
+    if (!exists) ins.run(id, name, cat, "", null);
+  }
   const n = DB.prepare("SELECT count(*) n FROM items").get().n;
   DB.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('items_synced_at',?)").run(new Date().toISOString());
   console.log(`Items synced: ${n}`);
@@ -524,52 +576,28 @@ function buildMarketRow(x){
   const minQlt=minLot?.qlt??null;
   const minPtn=minLot?.ptn??null;
   const lotAvg=lotPrices.length?avgOf(lotPrices):(o?.avg_price??null);
-  const sameLots=lotRows.filter(l=>l.qlt===minQlt && l.ptn===minPtn).map(l=>l.price).filter(p=>p>0);
 
-  let saleGroup=[];
-  try {
-    saleGroup=DB.prepare(`
-      SELECT price, amount, ts
-      FROM sale_observations
-      WHERE item_id=?
-        AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
-        AND (ptn IS ? OR (ptn IS NULL AND ? IS NULL))
-        AND price>0
-      ORDER BY datetime(ts) DESC
-      LIMIT 20
-    `).all(x.id, minQlt, minQlt, minPtn, minPtn);
-  } catch { saleGroup=[]; }
-  const salePrices=weightedPrices(saleGroup);
-
-  let ref=null, refSource="none", refCount=0, dataOk=false;
-  if(salePrices.length>=3){
-    ref=medianOf(salePrices);
-    refSource="recent_sales_20";
-    refCount=saleGroup.length;
-    dataOk=true;
-  } else if(sameLots.length>=3){
-    ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=true;
-  } else if(sameLots.length>=1){
-    ref=medianOf(sameLots); refSource="lots_qlt_ptn"; refCount=sameLots.length; dataOk=false;
-  } else if(salePrices.length>=1){
-    ref=medianOf(salePrices); refSource="sales_qlt_ptn"; refCount=saleGroup.length; dataOk=false;
+  // Strict: median of last 5 sales same rarity; else no market (ref = min lot for display only)
+  const mr=marketRefFromLast5Sales(x.id, minQlt, minPtn);
+  let ref=mr.ref, refSource=mr.refSource, refCount=mr.refCount, dataOk=mr.dataOk;
+  if(!dataOk && minP!=null){
+    // No reliable market → orient on min lot itself (profit ~ 0 after fee context)
+    ref=minP;
+    refSource="min_lot";
+    refCount=0;
   }
 
   let status="no_data", statusLabel="Мало данных";
-  if(minP && ref && dataOk){
-    const ratio=minP/ref;
+  if(minP && dataOk && mr.ref){
+    const ratio=minP/mr.ref;
     if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
     else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
     else { status="normal"; statusLabel="Обычная"; }
-  } else if(minP && ref && !dataOk){
-    const ratio=minP/ref;
-    if(ratio<=0.85){ status="cheap"; statusLabel="Ниже рынка"; }
-    else if(ratio>=1.20){ status="expensive"; statusLabel="Выше рынка"; }
-    else if(minP){ status="has_lots"; statusLabel="В продаже"; }
   } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
 
-  const profit=(minP!=null && ref!=null)?Math.round(ref*0.95 - minP):null;
-  const profitPct=(minP && ref && minP>0)?Math.round(((ref*0.95 - minP)/minP)*1000)/10:null;
+  // Profit only when we have real last-5 median
+  const profit=(minP!=null && dataOk && mr.ref!=null)?Math.round(mr.ref*0.95 - minP):null;
+  const profitPct=(minP && dataOk && mr.ref && minP>0)?Math.round(((mr.ref*0.95 - minP)/minP)*1000)/10:null;
   const lastSaleRow=DB.prepare("SELECT price,ts,qlt,ptn FROM sale_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1").get(x.id);
   const lastSale=lastSaleRow?.price??null;
   const changeVsLast=(minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null;
@@ -606,15 +634,13 @@ function buildMarketRow(x){
     status,statusLabel,
     profit,profitPct,
     ts: (()=>{
-      // Prefer newest lot listing time over observation scan time
+      // Prefer created_at (listing time) over seen_at so rescans don't bump all rarities
       let best=0, bestIso=null;
       for(const l of lotRows){
-        for(const key of ["created_at","seen_at"]){
-          const v=l[key];
-          if(!v) continue;
-          const t=new Date(v).getTime();
-          if(Number.isFinite(t) && t>best){ best=t; bestIso=typeof v==="string"?v:new Date(t).toISOString(); }
-        }
+        const v=l.created_at || l.seen_at;
+        if(!v) continue;
+        const t=new Date(v).getTime();
+        if(Number.isFinite(t) && t>best){ best=t; bestIso=typeof v==="string"?v:new Date(t).toISOString(); }
       }
       return bestIso || o?.ts || null;
     })()
@@ -629,44 +655,26 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
   const minPtn=minLot?.ptn??null;
   const lotPrices=fakeLots.map(l=>l.price).filter(p=>p>0);
   const lotAvg=lotPrices.length?avgOf(lotPrices):null;
-  const sameLots=fakeLots.filter(l=>l.ptn===minPtn).map(l=>l.price).filter(p=>p>0);
 
-  let saleGroup=[];
-  try {
-    saleGroup=DB.prepare(`
-      SELECT price, amount, ts FROM sale_observations
-      WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) AND price>0
-      ORDER BY datetime(ts) DESC LIMIT 20
-    `).all(baseItem.id, qlt, qlt);
-  } catch { saleGroup=[]; }
-  const salePrices=weightedPrices(saleGroup);
-
-  let ref=null, refSource="none", refCount=0, dataOk=false;
-  if(salePrices.length>=3){
-    ref=medianOf(salePrices); refSource="recent_sales_20"; refCount=saleGroup.length; dataOk=true;
-  } else if(sameLots.length>=3){
-    ref=medianOf(sameLots); refSource="lots_qlt"; refCount=sameLots.length; dataOk=true;
-  } else if(sameLots.length>=1){
-    ref=medianOf(sameLots); refSource="lots_qlt"; refCount=sameLots.length; dataOk=false;
-  } else if(salePrices.length>=1){
-    ref=medianOf(salePrices); refSource="sales_qlt"; refCount=saleGroup.length; dataOk=false;
+  // Strict: median of last 5 sales of THIS rarity only
+  const mr=marketRefFromLast5Sales(baseItem.id, qlt, minPtn);
+  let ref=mr.ref, refSource=mr.refSource, refCount=mr.refCount, dataOk=mr.dataOk;
+  if(!dataOk && minP!=null){
+    ref=minP;
+    refSource="min_lot";
+    refCount=0;
   }
 
   let status="no_data", statusLabel="Мало данных";
-  if(minP && ref && dataOk){
-    const ratio=minP/ref;
+  if(minP && dataOk && mr.ref){
+    const ratio=minP/mr.ref;
     if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
     else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
     else { status="normal"; statusLabel="Обычная"; }
-  } else if(minP && ref && !dataOk){
-    const ratio=minP/ref;
-    if(ratio<=0.85){ status="cheap"; statusLabel="Ниже рынка"; }
-    else if(ratio>=1.20){ status="expensive"; statusLabel="Выше рынка"; }
-    else { status="has_lots"; statusLabel="В продаже"; }
   } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
 
-  const profit=(minP!=null && ref!=null)?Math.round(ref*0.95 - minP):null;
-  const profitPct=(minP && ref && minP>0)?Math.round(((ref*0.95 - minP)/minP)*1000)/10:null;
+  const profit=(minP!=null && dataOk && mr.ref!=null)?Math.round(mr.ref*0.95 - minP):null;
+  const profitPct=(minP && dataOk && mr.ref && minP>0)?Math.round(((mr.ref*0.95 - minP)/minP)*1000)/10:null;
   const lastSaleRow=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY ts DESC LIMIT 1").get(baseItem.id, qlt, qlt);
   const lastSale=lastSaleRow?.price??null;
   const sa=salesAverages(baseItem.id);
@@ -703,21 +711,19 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     lastSale,
     changeVsLast: (minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null,
     status, statusLabel, profit, profitPct,
-    // Per-rarity time: newest lot of THIS qlt only (created_at or when first seen).
-    // Listing a "редкое" must not push "обычное"/"особое" of the same item to the top.
+    // Per-rarity time: ONLY created_at of this qlt (listing time).
+    // Rescan must not bump other rarities of the same item to the top.
     ts: (()=>{
       let best=0, bestIso=null;
       for(const l of fakeLots){
-        for(const key of ["created_at","seen_at"]){
-          const v=l[key];
-          if(!v) continue;
-          const t=new Date(v).getTime();
-          if(Number.isFinite(t) && t>best){ best=t; bestIso=typeof v==="string"?v:new Date(t).toISOString(); }
-        }
+        const v=l.created_at || l.seen_at;
+        if(!v) continue;
+        const t=new Date(v).getTime();
+        if(Number.isFinite(t) && t>best){ best=t; bestIso=typeof v==="string"?v:new Date(t).toISOString(); }
       }
       if(bestIso) return bestIso;
       try {
-        const s=DB.prepare("SELECT MAX(COALESCE(created_at,seen_at)) AS ts FROM lots WHERE item_id=? AND qlt IS ?").get(baseItem.id, qlt);
+        const s=DB.prepare("SELECT MAX(created_at) AS ts FROM lots WHERE item_id=? AND qlt IS ?").get(baseItem.id, qlt);
         if(s?.ts) return s.ts;
       } catch {}
       return null;

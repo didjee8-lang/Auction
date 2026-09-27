@@ -1451,7 +1451,7 @@ async function openItem(id,silent){
     }
     chart=renderSaleChart(7);
     const ch=v=>v==null?"—":((v>0?"+":"")+Number(v).toFixed(1)+"%");const chC=v=>v==null?"":(v<-3?"g":v>3?"r":"");
-    const srcNote=row.histSource==="sales_2d"?`медиана продаж сегодня + вчера (${row.histCount})`:row.histSource==="sales_7d"?`медиана продаж 7д (${row.histCount})`:row.histSource==="lots_same_group"?`средняя текущих лотов той же редкости/заточки (${row.histCount})`:`${row.histSource||"—"} (${row.histCount||0})`;
+    const srcNote=row.histSource==="last5_sales_qlt"?`медиана последних 5 продаж этой редкости (${row.histCount})`:row.histSource==="min_lot"?`мало продаж — ориентир = мин. лот (без рынка)`:row.histSource==="sales_2d"?`медиана продаж сегодня + вчера (${row.histCount})`:row.histSource==="sales_7d"?`медиана продаж 7д (${row.histCount})`:`${row.histSource||"—"} (${row.histCount||0})`;
     $("dBody").innerHTML=`
       <div style="margin-bottom:10px">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""} ${statusBadge(row)}
         <span class="sub" style="margin-left:8px">${esc(CAT_RU[(row.category||"").split("/")[0]]||row.category||"")}</span></div>
@@ -1565,9 +1565,13 @@ async function openItem(id,silent){
           const live=await (await fetch("/api/item/"+encodeURIComponent(id)+"/live",{cache:"no-store"})).json();
           if(!live?.ok || activeId!==id)return;
           const rr=rows.find(x=>x.id===id);
+          let changed=false;
           if(rr){
-            rr.lots=Number(live.lotsCount||0);
-            rr.min_price=live.minPrice??null;
+            const nextLots=Number(live.lotsCount||0);
+            const nextMin=live.minPrice??null;
+            if(rr.lots!==nextLots || rr.min_price!==nextMin) changed=true;
+            rr.lots=nextLots;
+            rr.min_price=nextMin;
             rr.minUnitPrice=live.minUnitPrice??live.minPrice??null;
             rr.minAmount=live.minAmount??null;
             rr.minTotalPrice=live.minTotalPrice??null;
@@ -1576,23 +1580,80 @@ async function openItem(id,silent){
             rr.totalAmount=live.totalAmount??null;
             rr.ts=live.ts||rr.ts;
           }
-          const liveScrollState=saveScrollState();
-          renderCards();renderFavs();
-          requestAnimationFrame(()=>restoreScrollState(liveScrollState));
-          if(!window._drawerHistoryAt || Date.now()-window._drawerHistoryAt>=6000){
+          if(changed){
+            const liveScrollState=saveScrollState();
+            lastCardsSig=""; // force cards refresh
+            renderCards();renderFavs();
+            requestAnimationFrame(()=>restoreScrollState(liveScrollState));
+          }
+          if(!window._drawerHistoryAt || Date.now()-window._drawerHistoryAt>=8000){
             window._drawerHistoryAt=Date.now();
             openItem(id,true);
           }
         }catch{}
-      },1500);
+      },2000);
     requestAnimationFrame(()=>restoreScrollState(drawerScrollState));
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
 function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
-async function load(){try{const j=await(await fetch("/api/market",{cache:"no-store"})).json();rows=j.rows||[];renderCatChips();renderTplBar();renderCards();renderFavs();renderHunt();
-    if(rightTab==="catalog")renderCatalog();if(rightTab==="calc")renderCalc();
+let marketUpdatedAt=null;
+let lastCardsSig="";
+let loadBusy=false;
+function marketSig(list){
+  // Cheap fingerprint: id + min price + lots + status + profit — skip DOM rebuild if unchanged
+  return list.map(r=>`${r.id}|${r.min_price}|${r.lots}|${r.status}|${r.profit}|${r.ts||""}`).join(";");
+}
+async function load(forceFull){
+  if(loadBusy) return;
+  loadBusy=true;
+  try{
+    let j;
+    if(!forceFull && marketUpdatedAt){
+      try{
+        j=await (await fetch("/api/market/delta?since="+encodeURIComponent(marketUpdatedAt),{cache:"no-store"})).json();
+      }catch{ j=null; }
+    }
+    if(!j || j.full || !Array.isArray(j.rows)){
+      j=await (await fetch("/api/market",{cache:"no-store"})).json();
+      rows=j.rows||[];
+    } else {
+      // Merge delta into existing rows by id
+      const map=new Map(rows.map(r=>[r.id,r]));
+      for(const r of (j.rows||[])) map.set(r.id, r);
+      // Drop rows that lost all lots and disappeared from total set is handled by full refresh periodically
+      rows=[...map.values()];
+      // Periodic full resync every ~2 min of delta-only to avoid drift
+      if(!window._lastFullMarket || Date.now()-window._lastFullMarket>120000){
+        window._lastFullMarket=Date.now();
+        const full=await (await fetch("/api/market",{cache:"no-store"})).json();
+        rows=full.rows||rows;
+        j=full;
+      }
+    }
+    if(j.updated) marketUpdatedAt=j.updated;
+    if(!window._lastFullMarket) window._lastFullMarket=Date.now();
+
+    const scrollState=saveScrollState();
+    const sig=marketSig(rows);
+    const changed=sig!==lastCardsSig;
+    lastCardsSig=sig;
+
+    if(changed || forceFull){
+      renderCatChips();
+      renderTplBar();
+      renderCards();
+      renderFavs();
+      renderHunt();
+      if(rightTab==="catalog") renderCatalog();
+      if(rightTab==="calc") renderCalc();
+      requestAnimationFrame(()=>restoreScrollState(scrollState));
+    }
     refreshFavoriteLots();
-  }catch(e){$("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}}
+  }catch(e){
+    if(!$("cards").querySelector(".pcard"))
+      $("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`;
+  }finally{ loadBusy=false; }
+}
 async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
 $("q").oninput=()=>renderCards();
 $("huntQ").oninput=renderHunt;$("huntPrice").oninput=renderHunt;
@@ -1623,7 +1684,7 @@ document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
   if(rightTab==="catalog")renderCatalog();
   if(rightTab==="calc")renderCalc();
 }});
-$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load();$("scanBtn").disabled=false},1200)};
+$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load(true);$("scanBtn").disabled=false},1200)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
 
 
@@ -1712,7 +1773,7 @@ window.addEventListener("resize",()=>{
 });
 
 
-load();updateStatus();setInterval(load,15000);setInterval(refreshFavoriteLots,1500);setInterval(updateStatus,3000);
+load(true);updateStatus();setInterval(()=>load(false),8000);setInterval(refreshFavoriteLots,2000);setInterval(updateStatus,4000);
 </script>
 </body>
 </html>
