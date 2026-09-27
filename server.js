@@ -197,46 +197,105 @@ async function api(apiPath){
   throw lastErr || new Error("API failed");
 }
 
+/** Hardcoded trade goods that must always exist in DB */
+const FALLBACK_ITEMS = {
+  rdt1m5ve: { name: "Протоартефакт", category: "other/useful" },
+  "8AjTFOVB": { name: "Сезонный Пропуск", category: "other/useful" },
+  cpe1d8xz: { name: "Сезонный Пропуск + 50 уровней", category: "other/useful" },
+  kJD59qaP: { name: "Сезонный Пропуск + 20 уровней", category: "other/useful" },
+  "55VrA59M": { name: "Протоартефакт «Омута»", category: "other/trash" },
+  WdVYNOia: { name: "Протоартефакт «Батута»", category: "other/trash" },
+  nb0OaSNs: { name: "Протоартефакт «Застоя»", category: "other/trash" },
+  rA8fsgH1: { name: "Протоартефакт «Холодца»/«Пуха»", category: "other/trash" },
+  skuTyVhI: { name: "Протоартефакт «Разряда»/«Застоя»", category: "other/trash" },
+  vKJbSN93: { name: "Протоартефакт «Зажигалки»/Мороза", category: "other/trash" },
+  vpxznHgV: { name: "Протоартефакт «Волчка»", category: "other/trash" },
+  // premium / common trade
+  "2opw0": { name: "Премиум на 30 дней", category: "other/useful" },
+  "3gv2z": { name: "Премиум на 90 дней", category: "other/useful" },
+  "7l9d3": { name: "Премиум на 180 дней", category: "other/useful" },
+  m0jyj: { name: "Премиум на 1 день", category: "other/useful" },
+  n4lo6: { name: "Премиум на 3 дня", category: "other/useful" },
+  vjd5n: { name: "Премиум на 7 дней", category: "other/useful" },
+  dm195: { name: "Премиум на 14 дней", category: "other/useful" },
+  w3zn3: { name: "Боевой жетон", category: "other/useful" },
+};
+
+async function fetchListingFromSources(){
+  const sources = [
+    "https://cdn.stalcraft.wiki/exbo_item_parser/listing.json",
+    "https://raw.githubusercontent.com/StalcraftHQ/CustomItems/master/listing.json",
+  ];
+  const byId = new Map();
+  for (const url of sources) {
+    try {
+      const r = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!r.ok) { console.warn("listing source fail", url, r.status); continue; }
+      let text = await r.text();
+      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM
+      const list = JSON.parse(text);
+      if (!Array.isArray(list)) continue;
+      for (const x of list) {
+        const id = x?.id || x?.itemId || x?.item_id;
+        if (!id) continue;
+        const nameObj = x.name;
+        let name;
+        if (typeof nameObj === "string") name = nameObj;
+        else if (nameObj && typeof nameObj === "object") name = nameObj.ru || nameObj.en || nameObj.lines?.ru || nameObj.lines?.en;
+        else name = x.title || id;
+        const category = x.category || x.cat || "other";
+        const rarity = x.color || x.rarity || "";
+        if (!byId.has(id) || (name && name !== id)) {
+          byId.set(String(id), { id: String(id), name: String(name || id), category: String(category), rarity: String(rarity) });
+        }
+      }
+      console.log(`listing source ok: ${url} → ${list.length} rows`);
+    } catch (e) {
+      console.warn("listing source error", url, e.message);
+    }
+  }
+  // Official GitHub: pull names for known priority ids if still missing
+  for (const id of Object.keys(FALLBACK_ITEMS).concat(ALWAYS_PRIORITY)) {
+    if (byId.has(id)) continue;
+    for (const path of [
+      `ru/items/other/${id}.json`,
+      `ru/items/misc/${id}.json`,
+      `global/items/other/${id}.json`,
+    ]) {
+      try {
+        const r = await fetch(`https://raw.githubusercontent.com/EXBO-Studio/stalzone-database/main/${path}`);
+        if (!r.ok) continue;
+        const j = await r.json();
+        const name = j?.name?.lines?.ru || j?.name?.lines?.en || j?.name?.ru || j?.name?.en || FALLBACK_ITEMS[id]?.name || id;
+        const category = j?.category || FALLBACK_ITEMS[id]?.category || "other";
+        byId.set(id, { id, name: String(name), category: String(category), rarity: j?.color || "" });
+        break;
+      } catch {}
+    }
+  }
+  return [...byId.values()];
+}
+
 async function syncItems(){
-  console.log("Syncing items from listing.json ...");
-  const url = "https://cdn.stalcraft.wiki/exbo_item_parser/listing.json";
-  const r = await fetch(url, { headers: { "Accept": "application/json" } });
-  if (!r.ok) throw new Error(`listing.json ${r.status}`);
-  const list = await r.json();
+  console.log("Syncing items from multiple sources ...");
+  const list = await fetchListingFromSources();
+  if (!list.length) throw new Error("No items from any listing source");
   const ins = DB.prepare(`INSERT INTO items(id,name,category,rarity,icon) VALUES(?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET name=excluded.name, category=excluded.category, rarity=excluded.rarity`);
   const tx = DB.transaction((rows) => {
     for (const x of rows) {
-      const id = x.id;
-      if (!id) continue;
-      const name = (x.name && (x.name.ru || x.name.en)) || id;
-      const category = x.category || "";
-      const rarity = x.color || x.rarity || "";
-      ins.run(id, name, category, rarity, null);
+      if (!x.id) continue;
+      ins.run(x.id, x.name || x.id, x.category || "", x.rarity || "", null);
+    }
+    // Always upsert fallback trade goods (overwrite name if missing)
+    for (const [id, meta] of Object.entries(FALLBACK_ITEMS)) {
+      ins.run(id, meta.name, meta.category, "", null);
     }
   });
   tx(list);
-  // Ensure always-priority trade items exist even if listing lags
-  const FALLBACK_NAMES = {
-    rdt1m5ve: ["Протоартефакт", "other/useful"],
-    "8AjTFOVB": ["Сезонный Пропуск", "other/useful"],
-    cpe1d8xz: ["Сезонный Пропуск + 50 уровней", "other/useful"],
-    kJD59qaP: ["Сезонный Пропуск + 20 уровней", "other/useful"],
-    "55VrA59M": ["Протоартефакт «Омута»", "other/trash"],
-    WdVYNOia: ["Протоартефакт «Батута»", "other/trash"],
-    nb0OaSNs: ["Протоартефакт «Застоя»", "other/trash"],
-    rA8fsgH1: ["Протоартефакт «Холодца»/«Пуха»", "other/trash"],
-    skuTyVhI: ["Протоартефакт «Разряда»/«Застоя»", "other/trash"],
-    vKJbSN93: ["Протоартефакт «Зажигалки»/Мороза", "other/trash"],
-    vpxznHgV: ["Протоартефакт «Волчка»", "other/trash"],
-  };
-  for (const [id, [name, cat]] of Object.entries(FALLBACK_NAMES)) {
-    const exists = DB.prepare("SELECT id FROM items WHERE id=?").get(id);
-    if (!exists) ins.run(id, name, cat, "", null);
-  }
   const n = DB.prepare("SELECT count(*) n FROM items").get().n;
   DB.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES('items_synced_at',?)").run(new Date().toISOString());
-  console.log(`Items synced: ${n}`);
+  console.log(`Items synced: ${n} (sources + fallback)`);
 }
 
 function parseLots(j){
@@ -739,6 +798,10 @@ function getMarketRows(force=false){
   }
   const items=DB.prepare("SELECT * FROM items ORDER BY name").all();
   const getLots=DB.prepare(`SELECT price, amount, qlt, ptn, created_at, seen_at FROM lots WHERE item_id=? ORDER BY price ASC`);
+  const prioIds=new Set(ALWAYS_PRIORITY);
+  try {
+    for (const r of DB.prepare("SELECT id FROM priority_items").all()) prioIds.add(r.id);
+  } catch {}
   const rows=[];
   for(const x of items){
     const lotRows=getLots.all(x.id);
@@ -754,13 +817,22 @@ function getMarketRows(force=false){
     if(expand && byQlt.size>=1){
       // One card per rarity that has lots
       for(const q of [...byQlt.keys()].sort((a,b)=>a-b)){
-        rows.push(buildVariantRow(x, q, byQlt.get(q), lotRows));
+        const row=buildVariantRow(x, q, byQlt.get(q), lotRows);
+        row.priority=prioIds.has(x.id);
+        rows.push(row);
       }
       // Also keep base row if there are lots without qlt
       const noQlt=lotRows.filter(l=>l.qlt==null);
-      if(noQlt.length) rows.push(buildMarketRow(x));
+      if(noQlt.length){
+        const row=buildMarketRow(x);
+        row.priority=prioIds.has(x.id);
+        rows.push(row);
+      }
     } else {
-      rows.push(buildMarketRow(x));
+      const row=buildMarketRow(x);
+      row.priority=prioIds.has(x.id);
+      // Always keep priority trade goods in the feed even with 0 lots
+      rows.push(row);
     }
   }
   marketCache={at:now, rows, updated:lastScan};

@@ -901,7 +901,8 @@ function renderCards(){
     $("cards").querySelectorAll("[data-unexcl]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();removeExclude(btn.dataset.unexcl)});
     return;
   }
-  let list=rows.filter(r=>(r.lots||0)>0&&!isExcl(r.id));
+  // Show lots OR priority trade goods (сезонный пропуск, протоартефакт) even with 0 lots
+  let list=rows.filter(r=>((r.lots||0)>0 || r.priority || isFav(r.id)) && !isExcl(r.id));
   // category multi-filter: empty = all
   if(selectedCats.length)list=list.filter(r=>selectedCats.includes(itemCat(r)));
   if(filter==="cheap")list=list.filter(r=>r.status==="cheap");
@@ -910,9 +911,9 @@ function renderCards(){
   else if(filter==="nodata")list=list.filter(r=>!r.dataOk);
   if(q){
     list=fuzzyFilter(list,q);
-    // If searching — also show matching items without active lots (e.g. Протоартефакт between scans)
+    // If searching — also show matching items without active lots
     if(filter==="all"){
-      const extra=fuzzyFilter(rows.filter(r=>(r.lots||0)===0&&!isExcl(r.id)), q, 30);
+      const extra=fuzzyFilter(rows.filter(r=>(r.lots||0)===0&&!isExcl(r.id)), q, 40);
       const seen=new Set(list.map(x=>x.id));
       for(const r of extra){ if(!seen.has(r.id)){ list.push(r); seen.add(r.id);} }
     }
@@ -934,17 +935,21 @@ function renderCards(){
   if(!list.length){$("cards").innerHTML=`<div class="empty" style="grid-column:1/-1">Нет лотов. Нажми «Сканировать» или смени фильтр</div>`;return}
   $("cards").innerHTML=list.map(r=>{
     const tier=tierBadge(r);
+    const hasLots=(r.lots||0)>0;
     const cls=["pcard",r.id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
     const profitLine=r.profit!=null?`<div class="pcard-profit ${r.profit>=0?"pos":"neg"}">${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)</div>`:"";
     const favOn=isFav(r.id);
+    const priceTxt=hasLots
+      ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
+      : (r.lastSale!=null?`<span style="color:var(--muted)">посл. ${fmt(r.lastSale)}</span>`:"—");
     return`<div class="${cls}" data-id="${r.id}">
       <button class="pcard-excl" data-excl="${esc(r.id)}" title="В исключения">−</button>
       <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
       <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
       <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(r.name||r.id)}</div>
       <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}</div>
-      <div class="pcard-price">${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span></div>
-      <div class="pcard-qty"><b>${fmtN(r.lots)} лот.</b></div>
+      <div class="pcard-price">${priceTxt}</div>
+      <div class="pcard-qty"><b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b></div>
       ${profitLine}
       <div class="pcard-status">${statusBadge(r)}</div>
     </div>`;
