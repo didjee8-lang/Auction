@@ -27,7 +27,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .btn:disabled{opacity:.5}
 .status{color:var(--muted);font-size:12px;margin-left:auto}
 .status b{color:var(--neon2)}
-.dashboard{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);flex-shrink:0;overflow:visible;min-height:72px;max-height:none;height:auto}
+.dashboard{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);flex-shrink:0;overflow:visible;min-height:72px;max-height:140px;height:auto;overflow-y:auto}
 .dashboard .fav-empty{color:var(--muted);font-size:12px;padding:12px 8px;align-self:center;white-space:nowrap}
 .fav-card{flex:0 0 auto;width:148px;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:6px 8px;cursor:pointer;display:flex;flex-direction:column;gap:2px;position:relative;transition:border-color .15s,box-shadow .15s}
 .fav-card .fav-qlt{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-top:1px}
@@ -153,12 +153,18 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .overlay.show{opacity:1;pointer-events:auto}
 .drawer{position:fixed;top:50%;left:50%;width:min(1240px,97vw);height:min(900px,94vh);max-height:94vh;background:var(--panel);border:1px solid var(--border);border-radius:14px;z-index:40;display:flex;flex-direction:column;transform:translate(-50%,-50%) scale(.92);opacity:0;pointer-events:none;transition:transform .18s,opacity .18s;box-shadow:0 20px 60px rgba(0,0,0,.7),0 0 40px var(--glow);overflow:hidden}
 .drawer.open{transform:translate(-50%,-50%) scale(1);opacity:1;pointer-events:auto}
+/* Allow the whole drawer content to scroll (esp. mobile) */
+.drawer-body{
+  flex:1 1 auto;min-height:0;overflow-y:auto!important;overflow-x:hidden;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  touch-action:pan-y;padding:8px 10px 24px;display:flex;flex-direction:column;gap:7px;
+}
 .sec-toggle{background:transparent;border:1px solid var(--border);color:var(--neon2);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:11px;margin-left:8px}
 .sec-toggle:hover{border-color:var(--neon);box-shadow:0 0 8px var(--glow)}
 .section-row{display:flex;align-items:center;margin:14px 0 8px}
 .section-row .section{margin:0}
 
-.table-panels{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:0;overflow:hidden}.table-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.table-panel .mini{flex:1;min-height:0}.drawer-top{display:grid;grid-template-columns:1fr auto;gap:7px}.drawer-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.drawer-tools .rec{padding:6px 9px;display:flex;gap:12px;align-items:center}.drawer-tools .rec-row{margin:0;font-size:11px;gap:4px}.chart-box{height:170px;min-height:150px}.chart-tools{margin:0 0 4px}.metric-line{margin:0;display:flex;gap:5px;flex-wrap:nowrap;overflow:hidden}.metric-pill{padding:4px 7px;font-size:9px;white-space:nowrap}.market-note{font-size:10px;padding:6px 8px}.drawer .btn-sm{margin:0}.drawer .stat{padding:6px}.drawer .stat .lbl{font-size:9px}.drawer .stat .val{font-size:13px}
+.table-panels{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:0 0 auto;min-height:0}.table-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.drawer-top{display:grid;grid-template-columns:1fr auto;gap:7px}.drawer-tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}.drawer-tools .rec{padding:6px 9px;display:flex;gap:12px;align-items:center}.drawer-tools .rec-row{margin:0;font-size:11px;gap:4px}.chart-box{height:170px;min-height:150px;flex-shrink:0}.chart-tools{margin:0 0 4px}.metric-line{margin:0;display:flex;gap:5px;flex-wrap:nowrap;overflow:hidden}.metric-pill{padding:4px 7px;font-size:9px;white-space:nowrap}.market-note{font-size:10px;padding:6px 8px}.drawer .btn-sm{margin:0}.drawer .stat{padding:6px}.drawer .stat .lbl{font-size:9px}.drawer .stat .val{font-size:13px}
 .sell-calc{background:var(--bg);border:1px solid var(--border);border-radius:9px;padding:9px 10px;margin-top:7px}
 .sell-calc-title{font-size:10px;text-transform:uppercase;color:var(--muted);margin-bottom:7px;font-weight:600}
 .sell-calc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
@@ -170,13 +176,12 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .sell-calc .sc-fee{color:var(--yellow)}
 @media(max-width:700px){.sell-calc-grid{grid-template-columns:1fr 1fr}}
 
-.drawer-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.drawer-head{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
 .drawer-head .icon,.drawer-head .icon-ph{width:52px;height:52px;min-width:52px;min-height:52px;border-radius:10px;background:var(--card);border:1px solid rgba(255,42,42,.1);background-repeat:no-repeat;background-position:center;background-size:contain;pointer-events:none;user-select:none}
 .drawer-head .icon-ph{display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--muted);font-size:18px}
 .drawer-head h2{flex:1;font-size:15px;font-weight:700}
 .drawer-head .close{background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;transition:color .15s}
 .drawer-head .close:hover{color:var(--neon)}
-.drawer-body{flex:1;overflow:hidden;padding:8px 10px 10px;display:flex;flex-direction:column;gap:7px}
 .stats-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:5px;margin:0}.stat{min-width:0}.stat .val{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:900px){.stats-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .stat{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px}
@@ -197,12 +202,17 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .mini{width:100%;font-size:12px;border-collapse:collapse}
 .mini th{padding:5px 6px;font-size:10px;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);text-align:left}
 .mini td{padding:5px 6px;border-bottom:1px solid var(--border)}
-.table-panels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:0;flex:1;min-height:0;overflow:hidden}.table-panel{min-width:0;min-height:0;display:flex;flex-direction:column}.table-panel .mini{width:100%;flex:1;min-height:0}
-.table-panel{min-width:0;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden}
-.table-panel .section{margin:0;padding:7px 9px;border-bottom:1px solid var(--border);background:var(--card)}
-.table-panel .mini{font-size:11px}
+.table-panels{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin-top:0;flex:0 0 auto;min-height:0}
+.table-panel{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:320px}
+.table-panel .mini{width:100%;font-size:11px}
+.table-panel .section{margin:0;padding:7px 9px;border-bottom:1px solid var(--border);background:var(--card);flex-shrink:0}
 .table-panel .empty{padding:24px 10px}
-@media(max-width:800px){.table-panels{grid-template-columns:1fr}}
+.table-scroll{flex:1;min-height:120px;max-height:260px;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}
+@media(max-width:800px){
+  .table-panels{grid-template-columns:1fr;overflow:visible}
+  .table-panel{max-height:none;overflow:visible}
+  .table-scroll{max-height:none;min-height:0;overflow:visible}
+}
 
 .empty{text-align:center;color:var(--muted);padding:24px 12px}
 .btn-sm{background:var(--glow);border:1px solid var(--border);color:var(--neon2);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;margin-top:8px;transition:border-color .15s,box-shadow .15s}
@@ -227,12 +237,21 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .lots-filter input:focus{outline:none;border-color:var(--neon);box-shadow:0 0 0 2px var(--glow)}
 .lots-filter .hint{font-size:10px;color:var(--muted)}
 .lots-filter .near-hint{font-size:11px;color:var(--yellow)}
-.table-panel{display:flex;flex-direction:column;min-height:0;max-height:280px}
-.table-panel .section{flex-shrink:0}
-.table-scroll{flex:1;min-height:0;overflow:auto}
 .table-scroll::-webkit-scrollbar{width:6px}
 .table-scroll::-webkit-scrollbar-thumb{background:#3a1a1a;border-radius:3px}
 @media(max-width:800px){
+  .drawer{
+    width:100vw;height:100%;height:100dvh;max-height:100dvh;border-radius:0;
+    top:0;left:0;right:0;bottom:0;
+    transform:translateY(8%);opacity:0;
+  }
+  .drawer.open{transform:translateY(0);opacity:1}
+  .drawer-body{
+    flex:1 1 auto;min-height:0;
+    overflow-y:auto!important;-webkit-overflow-scrolling:touch;
+    overscroll-behavior:contain;touch-action:pan-y;
+    padding-bottom:max(24px, env(safe-area-inset-bottom));
+  }
   .top{padding:8px 10px;gap:8px}
   .logo{font-size:14px}
   .search{max-width:none;min-width:0;flex:1 1 120px}
@@ -249,11 +268,10 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   .main{grid-template-columns:1fr;overflow:auto}
   .pane{min-height:45vh;border-right:none;border-bottom:1px solid var(--border)}
   .cards{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
-  .drawer{width:100vw;height:100vh;max-height:100vh;border-radius:0;top:0;left:0;transform:translate(0,8%) scale(1);opacity:0}
-  .drawer.open{transform:translate(0,0);opacity:1}
   .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
   .table-panels{grid-template-columns:1fr!important}
-  .table-panel{max-height:220px}
+  .table-panel{max-height:none!important;overflow:visible}
+  .table-scroll{max-height:none!important;overflow:visible}
   .drawer-top{grid-template-columns:1fr}
   .drawer-tools{flex-direction:column;align-items:stretch}
   .metric-line{flex-wrap:wrap;overflow:auto}
@@ -932,14 +950,14 @@ function renderCards(){
   if(sortBy==="profit"){
     list.sort((a,b)=>(b.profitPct??-999)-(a.profitPct??-999));
   } else {
-    // Newest listings first (by last scan/observation time). No category pinning.
+    // Stable newest-first: bucket by minute so tiny ts noise doesn't reshuffle cards every poll
     list.sort((a,b)=>{
-      const ta=a.ts?new Date(a.ts).getTime():0;
-      const tb=b.ts?new Date(b.ts).getTime():0;
+      const ta=a.ts?Math.floor(new Date(a.ts).getTime()/60000):0;
+      const tb=b.ts?Math.floor(new Date(b.ts).getTime()/60000):0;
       if(tb!==ta) return tb-ta;
       const la=a.lots||0, lb=b.lots||0;
       if(lb!==la) return lb-la;
-      return String(a.name||"").localeCompare(String(b.name||""),"ru");
+      return String(a.id||"").localeCompare(String(b.id||""));
     });
   }
   $("activeCnt").textContent=list.length?`(${list.length})`:"";
@@ -1310,14 +1328,16 @@ function updateCalcSuggest(){
 const itemCache={};
 function saveScrollState(){
   const out=[];
-  document.querySelectorAll(".scroll,.table-scroll,.drawer-body").forEach((el,i)=>{
-    out.push([i,el.scrollTop,el.scrollLeft]);
+  document.querySelectorAll(".scroll,.table-scroll,#dBody,.drawer-body").forEach((el,i)=>{
+    out.push([i, el.scrollTop, el.scrollLeft, el.id||el.className]);
   });
+  const db=$("dBody");
+  if(db) window._drawerBodyScroll=db.scrollTop;
   return out;
 }
 function restoreScrollState(state){
   if(!state)return;
-  const els=document.querySelectorAll(".scroll,.table-scroll,.drawer-body");
+  const els=document.querySelectorAll(".scroll,.table-scroll,#dBody,.drawer-body");
   state.forEach(([i,top,left])=>{
     const el=els[i];
     if(el){el.scrollTop=top;el.scrollLeft=left;}
@@ -1326,8 +1346,11 @@ function restoreScrollState(state){
 
 async function openItem(id,silent){
   if(!silent)copyItemName(id);
-  activeId=id;window._drawerHistoryAt=0;renderCards();renderFavs();
+  activeId=id;
+  if(!silent){ window._drawerHistoryAt=0; renderCards(); renderFavs(); }
   $("drawer").classList.add("open");$("overlay").classList.add("show");
+  // Lock body scroll under drawer on mobile
+  document.body.style.overflow="hidden";
   const row=rows.find(r=>r.id===id)||{};const tier=tierBadge(row);
   $("dName").textContent=row.name||id;$("dName").style.color=tier?tier.color:"var(--text)";
   const img=$("dIcon"),ph=$("dIconPh");
@@ -1575,43 +1598,61 @@ async function openItem(id,silent){
       lotFilter.oninput=applyLotFilter;
     }
     if(itemRefreshTimer)clearInterval(itemRefreshTimer);
+    // Live refresh: update data only — NEVER rebuild drawer body (keeps mobile scroll)
     itemRefreshTimer=setInterval(async()=>{
         if(activeId!==id || !$("drawer").classList.contains("open"))return;
         try{
           const live=await (await fetch("/api/item/"+encodeURIComponent(id)+"/live",{cache:"no-store"})).json();
           if(!live?.ok || activeId!==id)return;
           const rr=rows.find(x=>x.id===id);
-          let changed=false;
           if(rr){
-            const nextLots=Number(live.lotsCount||0);
-            const nextMin=live.minPrice??null;
-            if(rr.lots!==nextLots || rr.min_price!==nextMin) changed=true;
-            rr.lots=nextLots;
-            rr.min_price=nextMin;
+            rr.lots=Number(live.lotsCount||0);
+            rr.min_price=live.minPrice??null;
             rr.minUnitPrice=live.minUnitPrice??live.minPrice??null;
             rr.minAmount=live.minAmount??null;
             rr.minTotalPrice=live.minTotalPrice??null;
-            rr.max_price=live.maxPrice??null;
-            rr.avg_price=live.avgPrice??null;
-            rr.totalAmount=live.totalAmount??null;
             rr.ts=live.ts||rr.ts;
           }
-          if(changed){
-            const liveScrollState=saveScrollState();
-            lastCardsSig=""; // force cards refresh
-            renderCards();renderFavs();
-            requestAnimationFrame(()=>restoreScrollState(liveScrollState));
+          // Patch lots table in place without full re-render if present
+          if(Array.isArray(live.lots) && $("lotsTable")){
+            const tbody=$("lotsTable").querySelector("tbody");
+            if(tbody){
+              const sorted=[...live.lots].sort((a,b)=>(Number(a.price)||0)-(Number(b.price)||0));
+              const scrollEl=tbody.closest(".table-scroll");
+              const st=scrollEl?scrollEl.scrollTop:0;
+              tbody.innerHTML=sorted.map(l=>{
+                const total=(Number(l.price)||0)*(Number(l.amount)||0);
+                const qb=qltBadge(l.qlt,l.ptn);
+                return `<tr data-unit="${Number(l.price)||0}"><td><b>${fmt(total)}</b><div class="sub">за весь лот · ${fmt(l.price)} / шт.</div></td><td>${fmtN(l.amount)}</td>
+                  <td>${qb?`<span class="badge-tier ${qb.cls}">${qb.label}</span>`:"—"}</td>
+                  <td class="sub">${l.created_at||l.created?new Date(l.created_at||l.created).toLocaleString("ru-RU"):"—"}</td></tr>`;
+              }).join("");
+              if(scrollEl) scrollEl.scrollTop=st;
+            }
           }
-          if(!window._drawerHistoryAt || Date.now()-window._drawerHistoryAt>=8000){
-            window._drawerHistoryAt=Date.now();
-            openItem(id,true);
-          }
+          // Do NOT call renderCards / openItem while drawer is open — prevents jump
         }catch{}
-      },2000);
-    requestAnimationFrame(()=>restoreScrollState(drawerScrollState));
+      },3000);
+    // Restore drawer body scroll only (not auction list) after first paint
+    requestAnimationFrame(()=>{
+      const db=$("dBody");
+      if(db && drawerScrollState){
+        // keep previous drawer scroll if silent refresh
+        if(silent && window._drawerBodyScroll!=null) db.scrollTop=window._drawerBodyScroll;
+      }
+    });
   }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
 }
-function closeDrawer(){if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}activeId=null;$("drawer").classList.remove("open");$("overlay").classList.remove("show");renderCards();renderFavs()}
+function closeDrawer(){
+  if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}
+  const db=$("dBody"); if(db) window._drawerBodyScroll=db.scrollTop;
+  activeId=null;
+  $("drawer").classList.remove("open");
+  $("overlay").classList.remove("show");
+  document.body.style.overflow="";
+  // Refresh list only after close
+  renderCards();renderFavs();
+}
 let marketUpdatedAt=null;
 let lastCardsSig="";
 let loadBusy=false;
@@ -1673,7 +1714,9 @@ async function load(forceFull){
     const changed=sig!==lastCardsSig;
     lastCardsSig=sig;
 
-    if(changed || forceFull){
+    // While drawer is open — never rebuild auction grid (stops jump/scroll reset)
+    const drawerOpen=$("drawer")?.classList.contains("open");
+    if((changed || forceFull) && !drawerOpen){
       renderCatChips();
       renderTplBar();
       renderCards();
@@ -1682,8 +1725,11 @@ async function load(forceFull){
       if(rightTab==="catalog") renderCatalog();
       if(rightTab==="calc") renderCalc();
       requestAnimationFrame(()=>restoreScrollState(scrollState));
+    } else if(changed && drawerOpen){
+      // only update in-memory; fav strip quietly if needed
+      lastCardsSig=sig;
     }
-    refreshFavoriteLots();
+    if(!drawerOpen) refreshFavoriteLots();
   }catch(e){
     if(!$("cards").querySelector(".pcard"))
       $("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`;
@@ -1808,7 +1854,15 @@ window.addEventListener("resize",()=>{
 });
 
 
-load(true);updateStatus();setInterval(()=>load(false),8000);setInterval(refreshFavoriteLots,2000);setInterval(updateStatus,4000);
+load(true);updateStatus();
+setInterval(()=>load(false),10000);
+setInterval(()=>{ if(!$("drawer")?.classList.contains("open")) refreshFavoriteLots(); },3000);
+setInterval(updateStatus,5000);
+// Keep drawer body scroll position remembered while user scrolls
+document.addEventListener("scroll",e=>{
+  const t=e.target;
+  if(t && (t.id==="dBody" || t.classList?.contains("drawer-body"))) window._drawerBodyScroll=t.scrollTop;
+},true);
 </script>
 </body>
 </html>
