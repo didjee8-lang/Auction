@@ -1473,19 +1473,37 @@ function bindPodInputs(){
       savePod();
     };
   });
+  body.querySelectorAll(".pod-color-btn").forEach(btn=>{
+    btn.onclick=e=>{
+      e.stopPropagation();
+      const id=btn.dataset.podId;
+      body.querySelectorAll(".pod-color-pop").forEach(p=>{
+        if(p.dataset.podId!==id) p.style.display="none";
+      });
+      const pop=body.querySelector(`.pod-color-pop[data-pod-id="${CSS.escape(id)}"]`);
+      if(!pop) return;
+      const open=pop.style.display==="none"||!pop.style.display;
+      pop.style.display=open?"grid":"none";
+    };
+  });
   body.querySelectorAll(".pod-swatch").forEach(btn=>{
-    btn.onclick=()=>{
+    btn.onclick=e=>{
+      e.stopPropagation();
       const id=btn.dataset.podId;
       const hex=btn.dataset.hex;
       const row=podRows.find(x=>x.id===id); if(!row) return;
       row.color=hex;
       const nameInp=body.querySelector(`input[data-pod-name="${CSS.escape(id)}"]`);
       if(nameInp) nameInp.style.color=hex;
-      const wrap=btn.closest(".pod-palette");
-      if(wrap) wrap.querySelectorAll(".pod-swatch").forEach(s=>{
-        s.style.outline=s.dataset.hex===hex?"2px solid #fff":"1px solid rgba(255,255,255,.25)";
-        s.style.transform=s.dataset.hex===hex?"scale(1.15)":"scale(1)";
-      });
+      const main=body.querySelector(`.pod-color-btn[data-pod-id="${CSS.escape(id)}"]`);
+      if(main){ main.style.background=hex; main.style.boxShadow=`0 0 0 2px ${hex}55`; }
+      const pop=body.querySelector(`.pod-color-pop[data-pod-id="${CSS.escape(id)}"]`);
+      if(pop){
+        pop.style.display="none";
+        pop.querySelectorAll(".pod-swatch").forEach(s=>{
+          s.style.outline=s.dataset.hex===hex?"2px solid #fff":"1px solid rgba(255,255,255,.2)";
+        });
+      }
       savePod();
     };
   });
@@ -1541,13 +1559,21 @@ function renderPod(opts){
     const hex=podColorHex(r.color);
     const swatches=POD_COLORS.map(h=>{
       const on=h.toLowerCase()===hex.toLowerCase();
-      return `<button type="button" class="pod-swatch" data-pod-id="${esc(r.id)}" data-hex="${h}" title=""
-        style="width:14px;height:14px;border-radius:3px;background:${h};border:none;padding:0;cursor:pointer;
-        outline:${on?"2px solid #fff":"1px solid rgba(255,255,255,.25)"};transform:${on?"scale(1.15)":"scale(1)"};flex-shrink:0"></button>`;
+      return `<button type="button" class="pod-swatch" data-pod-id="${esc(r.id)}" data-hex="${h}"
+        style="width:22px;height:22px;border-radius:5px;background:${h};border:none;padding:0;cursor:pointer;
+        outline:${on?"2px solid #fff":"1px solid rgba(255,255,255,.2)"};box-shadow:${on?"0 0 6px rgba(255,255,255,.35)":"none"}"></button>`;
     }).join("");
     return `<tr data-pod-id="${esc(r.id)}">
-      <td style="vertical-align:middle;min-width:120px">
-        <div class="pod-palette" style="display:flex;flex-wrap:wrap;gap:3px;max-width:130px">${swatches}</div>
+      <td style="vertical-align:middle;width:48px">
+        <div class="pod-color-wrap" style="position:relative;display:inline-block">
+          <button type="button" class="pod-color-btn" data-pod-id="${esc(r.id)}" title="Цвет"
+            style="width:28px;height:28px;border-radius:7px;background:${hex};border:1px solid var(--border);
+            cursor:pointer;box-shadow:0 0 0 2px ${hex}55;padding:0"></button>
+          <div class="pod-color-pop" data-pod-id="${esc(r.id)}"
+            style="display:none;position:absolute;left:0;top:34px;z-index:50;grid-template-columns:repeat(5,22px);gap:5px;
+            padding:8px;background:#0a0a0a;border:1px solid var(--border);border-radius:10px;
+            box-shadow:0 12px 28px rgba(0,0,0,.75),0 0 12px var(--glow)">${swatches}</div>
+        </div>
       </td>
       <td><input type="text" data-pod-name="${esc(r.id)}" value="${esc(r.name||"")}" placeholder="Название" autocomplete="off" style="color:${hex};font-weight:600;width:100%;min-width:100px;background:var(--bg);border:1px solid var(--border);padding:7px 8px;border-radius:6px"></td>
       <td><input type="text" inputmode="decimal" data-pod-price="${esc(r.id)}" value="${esc(String(r.price??""))}" placeholder="Цена / шт." autocomplete="off"></td>
@@ -2306,6 +2332,9 @@ $("dealTotal")?.addEventListener("click",()=>{
 document.addEventListener("click",e=>{
   if(!e.target.closest(".calc-search")){
     $("dealSuggest")?.classList.remove("open");
+  }
+  if(!e.target.closest(".pod-color-wrap")){
+    document.querySelectorAll(".pod-color-pop").forEach(p=>p.style.display="none");
   }
 });
 $("calcQ").oninput=updateCalcSuggest;
