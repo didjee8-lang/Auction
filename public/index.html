@@ -528,13 +528,21 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
           <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
           <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
+          <button type="button" class="btn" id="podHistBtn" style="margin-left:auto">История</button>
         </div>
         <div class="calc-sum" style="margin-top:12px">
           <div class="row"><span>Общая сумма (без комиссии)</span>
-            <b id="podSum" class="pod-copy" title="Нажми, чтобы скопировать" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
+            <b id="podSum" class="pod-copy" title="Копирует и сохраняет в историю" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
           </div>
           <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
-          <div class="sub" style="margin-top:4px">Кликни по сумме или по сумме строки — скопируется число</div>
+          <div class="sub" style="margin-top:4px">Кликни по общей сумме — скопируется и сохранится в историю (предметы, кол-во, цены)</div>
+        </div>
+        <div id="podHistPanel" style="display:none;margin-top:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+            <div class="section" style="margin:0">История подсчётов</div>
+            <button type="button" class="btn" id="podHistClear" style="margin-left:auto">Очистить историю</button>
+          </div>
+          <div id="podHistList"><div class="empty">Пока пусто — кликни по общей сумме</div></div>
         </div>
       </div>
       <div id="dealsPane" style="display:none">
@@ -630,6 +638,84 @@ function podColorHex(c){
 }
 function savePod(){ try{ localStorage.setItem("sz_pod_rows", JSON.stringify(podRows)); }catch{} }
 function podNewId(){ return "p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+let podHist=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_pod_hist")||"[]"); }catch{ return []; } })();
+if(!Array.isArray(podHist)) podHist=[];
+function savePodHist(){ try{ localStorage.setItem("sz_pod_hist", JSON.stringify(podHist)); }catch{} }
+function snapshotPodForHistory(){
+  const lines=[];
+  let total=0;
+  for(const r of podRows){
+    const p=calcNum(r.price), q=calcNum(r.qty);
+    if(!Number.isFinite(p)||p<0||!Number.isFinite(q)||q<=0) continue;
+    const sum=Math.round(p*q);
+    total+=sum;
+    lines.push({
+      name: String(r.name||"Без названия"),
+      color: podColorHex(r.color),
+      price: String(Math.round(p)),
+      qty: String(Math.round(q)),
+      sum: String(sum)
+    });
+  }
+  if(!lines.length) return null;
+  return {
+    id: "h"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+    ts: new Date().toISOString(),
+    total: String(Math.round(total)),
+    lines
+  };
+}
+function savePodHistoryFromSum(){
+  const snap=snapshotPodForHistory();
+  if(!snap) return false;
+  // не дублировать подряд одинаковый снимок (тот же total + те же строки)
+  const prev=podHist[0];
+  if(prev && prev.total===snap.total && JSON.stringify(prev.lines)===JSON.stringify(snap.lines)){
+    return true; // уже есть
+  }
+  podHist.unshift(snap);
+  if(podHist.length>100) podHist=podHist.slice(0,100);
+  savePodHist();
+  if($("podHistPanel")?.style.display!=="none") renderPodHist();
+  return true;
+}
+function renderPodHist(){
+  const box=$("podHistList"); if(!box) return;
+  if(!podHist.length){
+    box.innerHTML=`<div class="empty">Пока пусто — кликни по общей сумме</div>`;
+    return;
+  }
+  box.innerHTML=podHist.map(h=>{
+    const when=h.ts?new Date(h.ts).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+    const rows=(h.lines||[]).map(l=>`
+      <div class="info-row">
+        <span style="color:${esc(l.color||"#f2f2f2")};font-weight:600">${esc(l.name)}</span>
+        <b>${esc(l.qty)} × ${fmt(l.price)} = <span style="color:var(--neon2)">${fmt(l.sum)}</span></b>
+      </div>`).join("");
+    return `<div class="calc-item-info" style="margin-bottom:8px">
+      <div class="title" style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+        <span>${when}</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          <b class="pod-copy pod-hist-total" data-raw="${esc(h.total)}" title="Копировать сумму" style="color:var(--neon2);cursor:pointer">${fmt(h.total)}</b>
+          <button type="button" class="rm pod-hist-rm" data-id="${esc(h.id)}">×</button>
+        </span>
+      </div>
+      ${rows}
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".pod-hist-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      podHist=podHist.filter(x=>x.id!==btn.dataset.id);
+      savePodHist(); renderPodHist();
+    };
+  });
+  box.querySelectorAll(".pod-hist-total").forEach(el=>{
+    el.onclick=()=>{
+      const n=Number(el.dataset.raw);
+      if(Number.isFinite(n)) copyPlainNumber(n, el);
+    };
+  });
+}
 let favIds=JSON.parse(localStorage.getItem("sz_favs")||"[]");
 let excludeIds=JSON.parse(localStorage.getItem("sz_excl")||"[]");
 let selectedCats=JSON.parse(localStorage.getItem("sz_cats")||"[]");
@@ -2184,7 +2270,21 @@ $("podClearAll")?.addEventListener("click",()=>{
 });
 $("podSum")?.addEventListener("click",()=>{
   const n=Number($("podSum").dataset.raw);
-  if(Number.isFinite(n)) copyPlainNumber(n, $("podSum"));
+  if(!Number.isFinite(n)) return;
+  copyPlainNumber(n, $("podSum"));
+  savePodHistoryFromSum();
+});
+$("podHistBtn")?.addEventListener("click",()=>{
+  const panel=$("podHistPanel");
+  if(!panel) return;
+  const open=panel.style.display==="none"||!panel.style.display;
+  panel.style.display=open?"block":"none";
+  if(open) renderPodHist();
+});
+$("podHistClear")?.addEventListener("click",()=>{
+  if(!podHist.length) return;
+  if(!confirm("Очистить историю подсчётов?")) return;
+  podHist=[]; savePodHist(); renderPodHist();
 });
 $("dealQ")?.addEventListener("input", updateDealSuggest);
 $("dealBuy")?.addEventListener("input", updateDealPreview);
