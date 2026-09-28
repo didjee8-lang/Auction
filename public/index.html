@@ -526,8 +526,11 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
             <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
           </div>
           <div class="calc-sum" style="margin-top:12px">
-            <div class="row"><span>Общая сумма (без комиссии)</span><b id="podSum" style="color:var(--neon2)">—</b></div>
+            <div class="row"><span>Общая сумма (без комиссии)</span>
+              <b id="podSum" class="pod-copy" title="Нажми, чтобы скопировать" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
+            </div>
             <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
+            <div class="sub" style="margin-top:4px">Кликни по сумме или по сумме строки — скопируется число</div>
           </div>
         </div>
       </div>
@@ -1276,16 +1279,51 @@ function updateCalcMode(){
   if($("calcBuySummary")) $("calcBuySummary").style.display=buy?"block":"none";
   if($("calcSellSummary")) $("calcSellSummary").style.display=buy?"none":"block";
 }
+function copyPlainNumber(n, el){
+  if(n==null || !Number.isFinite(Number(n))) return;
+  const text=String(Math.round(Number(n)));
+  const flash=()=>{
+    if(!el) return;
+    const prev=el.style.borderColor;
+    el.style.borderColor="var(--neon)";
+    el.style.background="var(--glow)";
+    setTimeout(()=>{ el.style.borderColor=prev||"transparent"; el.style.background=""; },450);
+  };
+  const done=()=>{ flash(); try{ if(navigator.vibrate) navigator.vibrate(12); }catch{} };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>{
+      const ta=document.createElement("textarea");
+      ta.value=text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand("copy"); }catch{}
+      ta.remove(); done();
+    });
+  }else{
+    const ta=document.createElement("textarea");
+    ta.value=text; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); }catch{}
+    ta.remove(); done();
+  }
+}
 function recalcPod(){
   let total=0, lines=0;
   for(const r of podRows){
     const p=calcNum(r.price), q=calcNum(r.qty);
     const sum=(Number.isFinite(p)&&p>=0&&Number.isFinite(q)&&q>0)?p*q:NaN;
     const cell=document.querySelector(`#podBody tr[data-pod-id="${CSS.escape(r.id)}"] .pod-line-sum`);
-    if(cell) cell.textContent=Number.isFinite(sum)?fmt(sum):"—";
+    if(cell){
+      cell.textContent=Number.isFinite(sum)?fmt(sum):"—";
+      cell.dataset.raw=Number.isFinite(sum)?String(Math.round(sum)):"";
+      cell.classList.add("pod-copy");
+      cell.title=Number.isFinite(sum)?"Нажми, чтобы скопировать":"";
+      cell.style.cursor=Number.isFinite(sum)?"pointer":"default";
+    }
     if(Number.isFinite(sum)){ total+=sum; lines++; }
   }
-  if($("podSum")) $("podSum").textContent=lines?fmt(total):"—";
+  const el=$("podSum");
+  if(el){
+    el.textContent=lines?fmt(total):"—";
+    el.dataset.raw=lines?String(Math.round(total)):"";
+  }
   if($("podLines")) $("podLines").textContent=String(lines);
 }
 function bindPodInputs(){
@@ -1367,11 +1405,15 @@ function renderPod(opts){
       <td><select data-pod-color="${esc(r.id)}" style="color:${hex};background:var(--bg);border:1px solid var(--border);padding:6px;border-radius:6px;width:100%">${opts}</select></td>
       <td><input type="text" inputmode="decimal" data-pod-price="${esc(r.id)}" value="${esc(String(r.price??""))}" placeholder="Цена / шт." autocomplete="off"></td>
       <td><input type="text" inputmode="numeric" data-pod-qty="${esc(r.id)}" value="${esc(String(r.qty??""))}" placeholder="Кол-во" autocomplete="off"></td>
-      <td class="pod-line-sum" style="font-weight:700;color:var(--neon2)">—</td>
+      <td class="pod-line-sum pod-copy" style="font-weight:700;color:var(--neon2);user-select:none;padding:2px 6px;border-radius:6px;border:1px dashed transparent">—</td>
       <td><button type="button" class="rm pod-rm" data-id="${esc(r.id)}">×</button></td>
     </tr>`;
   }).join("");
   bindPodInputs();
+  // click-to-copy on line sums
+  body.querySelectorAll(".pod-line-sum").forEach(cell=>{
+    cell.onclick=()=>{ const n=Number(cell.dataset.raw); if(Number.isFinite(n)) copyPlainNumber(n, cell); };
+  });
   recalcPod();
   if(keep&&keep.field&&!opts?.skipFocus){
     requestAnimationFrame(()=>{
@@ -1928,6 +1970,10 @@ $("podClearAll")?.addEventListener("click",()=>{
   if(!podRows.length) return;
   if(!confirm("Удалить все строки подсчёта?")) return;
   podRows=[]; savePod(); renderPod({skipFocus:true});
+});
+$("podSum")?.addEventListener("click",()=>{
+  const n=Number($("podSum").dataset.raw);
+  if(Number.isFinite(n)) copyPlainNumber(n, $("podSum"));
 });
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
