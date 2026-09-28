@@ -484,25 +484,51 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
         <div class="cards" id="catItemsGrid"></div>
       </div>
       <div id="calcPane" style="display:none">
-        <div class="calc-search">
-          <input id="calcQ" placeholder="Поиск предмета по названию или ID..." autocomplete="off">
-          <div class="suggest" id="calcSuggest"></div>
-        </div>
         <div class="calc-mode" style="display:flex;gap:8px;margin:0 0 10px;flex-wrap:wrap">
           <button type="button" class="chart-tool active" id="calcBuyMode">Покупка</button>
           <button type="button" class="chart-tool" id="calcSellMode">Продажа</button>
           <button type="button" class="chart-tool" id="calcTotalSellMode">Общ. продажа</button>
+          <button type="button" class="chart-tool" id="calcPodMode">Подсчёт</button>
           <span id="calcModeHint" style="align-self:center;color:var(--muted);font-size:11px">Покупка: общая цена ÷ количество</span>
         </div>
-        <table class="calc-table">
-          <thead><tr id="calcHead"><th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th></tr></thead>
-          <tbody id="calcBody"></tbody>
-        </table>
-        <div id="calcDetails" class="calc-details"></div>
-        <div class="calc-sum" id="calcBuySummary"><div class="row"><span>Общая сумма покупки</span><b id="sumBuy">—</b></div></div>
-        <div class="calc-sum" id="calcSellSummary" style="display:none">
-          <div class="row"><span>Общая продажа игроку</span><b id="sumPlayer">—</b></div>
-          <div class="row"><span>Общая продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
+        <div id="calcMarketBlock">
+          <div class="calc-search">
+            <input id="calcQ" placeholder="Поиск предмета по названию или ID..." autocomplete="off">
+            <div class="suggest" id="calcSuggest"></div>
+          </div>
+          <table class="calc-table">
+            <thead><tr id="calcHead"><th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th></tr></thead>
+            <tbody id="calcBody"></tbody>
+          </table>
+          <div id="calcDetails" class="calc-details"></div>
+          <div class="calc-sum" id="calcBuySummary"><div class="row"><span>Общая сумма покупки</span><b id="sumBuy">—</b></div></div>
+          <div class="calc-sum" id="calcSellSummary" style="display:none">
+            <div class="row"><span>Общая продажа игроку</span><b id="sumPlayer">—</b></div>
+            <div class="row"><span>Общая продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
+          </div>
+        </div>
+        <div id="calcPodBlock" style="display:none">
+          <div class="sub" style="margin-bottom:8px">Свободный список: название, цвет, цена / шт. сохраняются. При сделке только впиши количество.</div>
+          <table class="calc-table" id="podTable">
+            <thead><tr>
+              <th style="width:28%">Предмет</th>
+              <th style="width:12%">Цвет</th>
+              <th style="width:18%">Цена / шт.</th>
+              <th style="width:14%">Кол-во</th>
+              <th style="width:18%">Сумма</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="podBody"></tbody>
+          </table>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+            <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
+            <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
+            <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
+          </div>
+          <div class="calc-sum" style="margin-top:12px">
+            <div class="row"><span>Общая сумма (без комиссии)</span><b id="podSum" style="color:var(--neon2)">—</b></div>
+            <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
+          </div>
         </div>
       </div>
     </div>
@@ -530,6 +556,22 @@ let calcSellPrices=JSON.parse(localStorage.getItem("sz_calc_sell_prices")||"{}")
 let calcSellQty=JSON.parse(localStorage.getItem("sz_calc_sell_qty")||"{}");
 let calcTotalSellPrices=JSON.parse(localStorage.getItem("sz_calc_total_sell_prices")||"{}");
 let calcTotalSellQty=JSON.parse(localStorage.getItem("sz_calc_total_sell_qty")||"{}");
+// Подсчёт: свободный список {id,name,color,price,qty}
+let podRows=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_pod_rows")||"[]"); }catch{ return []; } })();
+if(!Array.isArray(podRows)) podRows=[];
+const POD_COLORS=[
+  {id:"white",label:"Белый",hex:"#f2f2f2"},
+  {id:"grey",label:"Серый",hex:"#9ca3af"},
+  {id:"green",label:"Зелён",hex:"#4ade80"},
+  {id:"blue",label:"Синий",hex:"#60a5fa"},
+  {id:"purple",label:"Фиол",hex:"#c084fc"},
+  {id:"red",label:"Красн",hex:"#f87171"},
+  {id:"yellow",label:"Жёлт",hex:"#fbbf24"},
+  {id:"unique",label:"Уникал",hex:"#ff2a2a"},
+];
+function podColorHex(id){ return (POD_COLORS.find(c=>c.id===id)||POD_COLORS[0]).hex; }
+function savePod(){ try{ localStorage.setItem("sz_pod_rows", JSON.stringify(podRows)); }catch{} }
+function podNewId(){ return "p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let favIds=JSON.parse(localStorage.getItem("sz_favs")||"[]");
 let excludeIds=JSON.parse(localStorage.getItem("sz_excl")||"[]");
 let selectedCats=JSON.parse(localStorage.getItem("sz_cats")||"[]");
@@ -1209,28 +1251,159 @@ function recalcCalc(){
   $("calcDetails").innerHTML=details.join("");
 }
 function updateCalcMode(){
-  const buy=calcMode==="buy", sell=calcMode==="sell", total=calcMode==="totalSell";
-  $("calcBuyMode").classList.toggle("active", buy);
-  $("calcSellMode").classList.toggle("active", sell);
-  $("calcTotalSellMode").classList.toggle("active", total);
-  $("calcModeHint").textContent=buy
-    ?"Покупка: общая цена ÷ количество"
-    :sell?"Продажа: цена за 1 шт. × количество"
-    :"Общ. продажа: общая цена ÷ количество, аукцион −5%";
-  $("calcHead").innerHTML=buy
-    ?"<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>"
-    :sell?"<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>"
-    :"<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>";
-  $("calcBuySummary").style.display=buy?"block":"none";
-  $("calcSellSummary").style.display=buy?"none":"block";
+  const buy=calcMode==="buy", sell=calcMode==="sell", total=calcMode==="totalSell", pod=calcMode==="pod";
+  $("calcBuyMode")?.classList.toggle("active", buy);
+  $("calcSellMode")?.classList.toggle("active", sell);
+  $("calcTotalSellMode")?.classList.toggle("active", total);
+  $("calcPodMode")?.classList.toggle("active", pod);
+  if($("calcModeHint")){
+    $("calcModeHint").textContent=pod
+      ?"Подсчёт: название + цвет + цена/шт. × кол-во, без комиссии"
+      :buy?"Покупка: общая цена ÷ количество"
+      :sell?"Продажа: цена за 1 шт. × количество"
+      :"Общ. продажа: общая цена ÷ количество, аукцион −5%";
+  }
+  const market=$("calcMarketBlock"), podBlock=$("calcPodBlock");
+  if(market) market.style.display=pod?"none":"block";
+  if(podBlock) podBlock.style.display=pod?"block":"none";
+  if(pod) return;
+  if($("calcHead")){
+    $("calcHead").innerHTML=buy
+      ?"<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>"
+      :sell?"<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>"
+      :"<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>";
+  }
+  if($("calcBuySummary")) $("calcBuySummary").style.display=buy?"block":"none";
+  if($("calcSellSummary")) $("calcSellSummary").style.display=buy?"none":"block";
+}
+function recalcPod(){
+  let total=0, lines=0;
+  for(const r of podRows){
+    const p=calcNum(r.price), q=calcNum(r.qty);
+    const sum=(Number.isFinite(p)&&p>=0&&Number.isFinite(q)&&q>0)?p*q:NaN;
+    const cell=document.querySelector(`#podBody tr[data-pod-id="${CSS.escape(r.id)}"] .pod-line-sum`);
+    if(cell) cell.textContent=Number.isFinite(sum)?fmt(sum):"—";
+    if(Number.isFinite(sum)){ total+=sum; lines++; }
+  }
+  if($("podSum")) $("podSum").textContent=lines?fmt(total):"—";
+  if($("podLines")) $("podLines").textContent=String(lines);
+}
+function bindPodInputs(){
+  const body=$("podBody"); if(!body) return;
+  body.querySelectorAll("input[data-pod-name]").forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.podName;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      row.name=inp.value;
+      inp.style.color=podColorHex(row.color);
+      savePod();
+    };
+  });
+  body.querySelectorAll("select[data-pod-color]").forEach(sel=>{
+    sel.onchange=()=>{
+      const id=sel.dataset.podColor;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      row.color=sel.value;
+      const nameInp=body.querySelector(`input[data-pod-name="${CSS.escape(id)}"]`);
+      if(nameInp) nameInp.style.color=podColorHex(row.color);
+      sel.style.color=podColorHex(row.color);
+      savePod();
+    };
+  });
+  body.querySelectorAll("input[data-pod-price]").forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.podPrice;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      let raw=inp.value.replace(/[^0-9.,]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      row.price=raw.trim();
+      savePod(); recalcPod();
+    };
+  });
+  body.querySelectorAll("input[data-pod-qty]").forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.podQty;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      let raw=inp.value.replace(/[^0-9]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      row.qty=raw.trim();
+      savePod(); recalcPod();
+    };
+    inp.onkeydown=e=>{
+      if(e.key==="Enter"){
+        e.preventDefault();
+        const next=inp.closest("tr")?.nextElementSibling?.querySelector("input[data-pod-qty]");
+        if(next){ next.focus(); next.select(); }
+      }
+    };
+  });
+  body.querySelectorAll(".pod-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      podRows=podRows.filter(x=>x.id!==btn.dataset.id);
+      savePod(); renderPod({skipFocus:true});
+    };
+  });
+}
+function renderPod(opts){
+  const body=$("podBody"); if(!body) return;
+  if(!podRows.length){
+    body.innerHTML=`<tr><td colspan="6" class="empty" style="padding:20px">Нажми «+ Строка» — добавь товар и цену / шт.</td></tr>`;
+    recalcPod();
+    return;
+  }
+  const focused=document.activeElement;
+  const keep=focused&&focused.closest&&focused.closest("#podBody")?{
+    field: focused.dataset.podName?"name":focused.dataset.podPrice?"price":focused.dataset.podQty?"qty":focused.dataset.podColor?"color":null,
+    id: focused.dataset.podName||focused.dataset.podPrice||focused.dataset.podQty||focused.dataset.podColor,
+    start: focused.selectionStart, end: focused.selectionEnd
+  }:null;
+
+  body.innerHTML=podRows.map(r=>{
+    const color=r.color||"white";
+    const hex=podColorHex(color);
+    const opts=POD_COLORS.map(c=>`<option value="${c.id}" ${c.id===color?"selected":""} style="color:${c.hex};background:#111">${c.label}</option>`).join("");
+    return `<tr data-pod-id="${esc(r.id)}">
+      <td><input type="text" data-pod-name="${esc(r.id)}" value="${esc(r.name||"")}" placeholder="Название" autocomplete="off" style="color:${hex};font-weight:600;width:100%;min-width:100px;background:var(--bg);border:1px solid var(--border);padding:7px 8px;border-radius:6px"></td>
+      <td><select data-pod-color="${esc(r.id)}" style="color:${hex};background:var(--bg);border:1px solid var(--border);padding:6px;border-radius:6px;width:100%">${opts}</select></td>
+      <td><input type="text" inputmode="decimal" data-pod-price="${esc(r.id)}" value="${esc(String(r.price??""))}" placeholder="Цена / шт." autocomplete="off"></td>
+      <td><input type="text" inputmode="numeric" data-pod-qty="${esc(r.id)}" value="${esc(String(r.qty??""))}" placeholder="Кол-во" autocomplete="off"></td>
+      <td class="pod-line-sum" style="font-weight:700;color:var(--neon2)">—</td>
+      <td><button type="button" class="rm pod-rm" data-id="${esc(r.id)}">×</button></td>
+    </tr>`;
+  }).join("");
+  bindPodInputs();
+  recalcPod();
+  if(keep&&keep.field&&!opts?.skipFocus){
+    requestAnimationFrame(()=>{
+      const attr=keep.field==="name"?"data-pod-name":keep.field==="price"?"data-pod-price":keep.field==="qty"?"data-pod-qty":"data-pod-color";
+      const el=document.querySelector(`#podBody [${attr}="${CSS.escape(keep.id)}"]`);
+      if(el){
+        el.focus({preventScroll:true});
+        try{ if(el.setSelectionRange) el.setSelectionRange(keep.start, keep.end); }catch{}
+      }
+    });
+  }
+}
+function podAddRow(){
+  podRows.push({id:podNewId(), name:"", color:"white", price:"", qty:""});
+  savePod();
+  renderPod({skipFocus:true});
+  requestAnimationFrame(()=>{
+    const last=document.querySelector("#podBody tr:last-child input[data-pod-name]");
+    if(last) last.focus();
+  });
 }
 function renderCalc(opts){
   const skipPersist=!!(opts&&opts.skipPersist);
   const body=$("calcBody");
-  if(!skipPersist && body && body.dataset.mode){
+  if(!skipPersist && body && body.dataset.mode && body.dataset.mode!=="pod"){
     persistVisibleCalcInputs(body.dataset.mode);
   }
   updateCalcMode();
+  if(calcMode==="pod"){
+    renderPod(opts);
+    return;
+  }
   const state=calcStoresFor(calcMode);
   const focused=document.activeElement;
   const isFocused=focused&&focused.matches&&focused.matches("#calcBody input[data-qty-id],#calcBody input[data-price-id]");
@@ -1299,7 +1472,7 @@ function renderCalc(opts){
 function switchCalcMode(next){
   if(next===calcMode) return;
   const body=$("calcBody");
-  if(body && body.dataset.mode) persistVisibleCalcInputs(body.dataset.mode);
+  if(body && body.dataset.mode && body.dataset.mode!=="pod") persistVisibleCalcInputs(body.dataset.mode);
   calcMode=next;
   saveCalc();
   renderCalc({skipPersist:true});
@@ -1745,6 +1918,17 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classLi
 $("calcBuyMode").onclick=()=>switchCalcMode("buy");
 $("calcSellMode").onclick=()=>switchCalcMode("sell");
 $("calcTotalSellMode").onclick=()=>switchCalcMode("totalSell");
+$("calcPodMode")?.addEventListener("click",()=>switchCalcMode("pod"));
+$("podAddRow")?.addEventListener("click",()=>podAddRow());
+$("podClearQty")?.addEventListener("click",()=>{
+  for(const r of podRows) r.qty="";
+  savePod(); renderPod({skipFocus:true});
+});
+$("podClearAll")?.addEventListener("click",()=>{
+  if(!podRows.length) return;
+  if(!confirm("Удалить все строки подсчёта?")) return;
+  podRows=[]; savePod(); renderPod({skipFocus:true});
+});
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
