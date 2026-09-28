@@ -515,8 +515,8 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
         <div class="sub" style="margin-bottom:8px">Быстрый подсчёт для перекупа: название, цвет, цена / шт. сохраняются. При сделке только впиши количество.</div>
         <table class="calc-table" id="podTable">
           <thead><tr>
+            <th style="width:14%">Цвет</th>
             <th style="width:28%">Предмет</th>
-            <th style="width:12%">Цвет</th>
             <th style="width:18%">Цена / шт.</th>
             <th style="width:14%">Кол-во</th>
             <th style="width:18%">Сумма</th>
@@ -608,17 +608,26 @@ let calcTotalSellQty=JSON.parse(localStorage.getItem("sz_calc_total_sell_qty")||
 // Подсчёт: свободный список {id,name,color,price,qty}
 let podRows=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_pod_rows")||"[]"); }catch{ return []; } })();
 if(!Array.isArray(podRows)) podRows=[];
+// Палитра без названий (hex)
 const POD_COLORS=[
-  {id:"white",label:"Белый",hex:"#f2f2f2"},
-  {id:"grey",label:"Серый",hex:"#9ca3af"},
-  {id:"green",label:"Зелён",hex:"#4ade80"},
-  {id:"blue",label:"Синий",hex:"#60a5fa"},
-  {id:"purple",label:"Фиол",hex:"#c084fc"},
-  {id:"red",label:"Красн",hex:"#f87171"},
-  {id:"yellow",label:"Жёлт",hex:"#fbbf24"},
-  {id:"unique",label:"Уникал",hex:"#ff2a2a"},
+  "#f2f2f2","#d1d5db","#9ca3af","#6b7280","#374151",
+  "#fef08a","#fbbf24","#f59e0b","#ea580c","#c2410c",
+  "#86efac","#4ade80","#22c55e","#16a34a","#166534",
+  "#7dd3fc","#60a5fa","#3b82f6","#2563eb","#1d4ed8",
+  "#c4b5fd","#a78bfa","#c084fc","#a855f7","#7c3aed",
+  "#f9a8d4","#f472b6","#ec4899","#db2777","#9d174d",
+  "#fca5a5","#f87171","#ef4444","#ff2a2a","#b91c1c",
+  "#5eead4","#2dd4bf","#14b8a6","#0d9488","#0f766e",
 ];
-function podColorHex(id){ return (POD_COLORS.find(c=>c.id===id)||POD_COLORS[0]).hex; }
+const POD_COLOR_LEGACY={
+  white:"#f2f2f2",grey:"#9ca3af",green:"#4ade80",blue:"#60a5fa",
+  purple:"#c084fc",red:"#f87171",yellow:"#fbbf24",unique:"#ff2a2a"
+};
+function podColorHex(c){
+  if(!c) return POD_COLORS[0];
+  if(String(c).startsWith("#")) return c;
+  return POD_COLOR_LEGACY[c]||POD_COLORS[0];
+}
 function savePod(){ try{ localStorage.setItem("sz_pod_rows", JSON.stringify(podRows)); }catch{} }
 function podNewId(){ return "p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 let favIds=JSON.parse(localStorage.getItem("sz_favs")||"[]");
@@ -1378,14 +1387,19 @@ function bindPodInputs(){
       savePod();
     };
   });
-  body.querySelectorAll("select[data-pod-color]").forEach(sel=>{
-    sel.onchange=()=>{
-      const id=sel.dataset.podColor;
+  body.querySelectorAll(".pod-swatch").forEach(btn=>{
+    btn.onclick=()=>{
+      const id=btn.dataset.podId;
+      const hex=btn.dataset.hex;
       const row=podRows.find(x=>x.id===id); if(!row) return;
-      row.color=sel.value;
+      row.color=hex;
       const nameInp=body.querySelector(`input[data-pod-name="${CSS.escape(id)}"]`);
-      if(nameInp) nameInp.style.color=podColorHex(row.color);
-      sel.style.color=podColorHex(row.color);
+      if(nameInp) nameInp.style.color=hex;
+      const wrap=btn.closest(".pod-palette");
+      if(wrap) wrap.querySelectorAll(".pod-swatch").forEach(s=>{
+        s.style.outline=s.dataset.hex===hex?"2px solid #fff":"1px solid rgba(255,255,255,.25)";
+        s.style.transform=s.dataset.hex===hex?"scale(1.15)":"scale(1)";
+      });
       savePod();
     };
   });
@@ -1438,12 +1452,18 @@ function renderPod(opts){
   }:null;
 
   body.innerHTML=podRows.map(r=>{
-    const color=r.color||"white";
-    const hex=podColorHex(color);
-    const opts=POD_COLORS.map(c=>`<option value="${c.id}" ${c.id===color?"selected":""} style="color:${c.hex};background:#111">${c.label}</option>`).join("");
+    const hex=podColorHex(r.color);
+    const swatches=POD_COLORS.map(h=>{
+      const on=h.toLowerCase()===hex.toLowerCase();
+      return `<button type="button" class="pod-swatch" data-pod-id="${esc(r.id)}" data-hex="${h}" title=""
+        style="width:14px;height:14px;border-radius:3px;background:${h};border:none;padding:0;cursor:pointer;
+        outline:${on?"2px solid #fff":"1px solid rgba(255,255,255,.25)"};transform:${on?"scale(1.15)":"scale(1)"};flex-shrink:0"></button>`;
+    }).join("");
     return `<tr data-pod-id="${esc(r.id)}">
+      <td style="vertical-align:middle;min-width:120px">
+        <div class="pod-palette" style="display:flex;flex-wrap:wrap;gap:3px;max-width:130px">${swatches}</div>
+      </td>
       <td><input type="text" data-pod-name="${esc(r.id)}" value="${esc(r.name||"")}" placeholder="Название" autocomplete="off" style="color:${hex};font-weight:600;width:100%;min-width:100px;background:var(--bg);border:1px solid var(--border);padding:7px 8px;border-radius:6px"></td>
-      <td><select data-pod-color="${esc(r.id)}" style="color:${hex};background:var(--bg);border:1px solid var(--border);padding:6px;border-radius:6px;width:100%">${opts}</select></td>
       <td><input type="text" inputmode="decimal" data-pod-price="${esc(r.id)}" value="${esc(String(r.price??""))}" placeholder="Цена / шт." autocomplete="off"></td>
       <td><input type="text" inputmode="numeric" data-pod-qty="${esc(r.id)}" value="${esc(String(r.qty??""))}" placeholder="Кол-во" autocomplete="off"></td>
       <td class="pod-line-sum pod-copy" style="font-weight:700;color:var(--neon2);user-select:none;padding:2px 6px;border-radius:6px;border:1px dashed transparent">—</td>
@@ -1451,14 +1471,14 @@ function renderPod(opts){
     </tr>`;
   }).join("");
   bindPodInputs();
-  // click-to-copy on line sums
   body.querySelectorAll(".pod-line-sum").forEach(cell=>{
     cell.onclick=()=>{ const n=Number(cell.dataset.raw); if(Number.isFinite(n)) copyPlainNumber(n, cell); };
   });
   recalcPod();
   if(keep&&keep.field&&!opts?.skipFocus){
     requestAnimationFrame(()=>{
-      const attr=keep.field==="name"?"data-pod-name":keep.field==="price"?"data-pod-price":keep.field==="qty"?"data-pod-qty":"data-pod-color";
+      const attr=keep.field==="name"?"data-pod-name":keep.field==="price"?"data-pod-price":keep.field==="qty"?"data-pod-qty":null;
+      if(!attr) return;
       const el=document.querySelector(`#podBody [${attr}="${CSS.escape(keep.id)}"]`);
       if(el){
         el.focus({preventScroll:true});
@@ -1468,7 +1488,7 @@ function renderPod(opts){
   }
 }
 function podAddRow(){
-  podRows.push({id:podNewId(), name:"", color:"white", price:"", qty:""});
+  podRows.push({id:podNewId(), name:"", color:"#f2f2f2", price:"", qty:""});
   savePod();
   renderPod({skipFocus:true});
   requestAnimationFrame(()=>{
