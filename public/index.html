@@ -421,6 +421,8 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   <button type="button" class="mobile-nav-item" data-mobile-tab="auction">Аукцион</button>
   <button type="button" class="mobile-nav-item" data-mobile-tab="catalog">Каталог</button>
   <button type="button" class="mobile-nav-item" data-mobile-tab="calc">Калькулятор</button>
+  <button type="button" class="mobile-nav-item" data-mobile-tab="perekup">Перекуп</button>
+  <button type="button" class="mobile-nav-item" data-mobile-tab="deals">Сделки</button>
   <button type="button" class="mobile-nav-close" id="mobileNavClose">Закрыть</button>
 </div>
 <div class="dashboard" id="dashboard">
@@ -469,6 +471,8 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
       <div class="tabs" id="mainTabs">
         <div class="tab active" data-tab="catalog">Каталог</div>
         <div class="tab" data-tab="calc">Калькулятор</div>
+        <div class="tab" data-tab="perekup">Перекуп</div>
+        <div class="tab" data-tab="deals">Сделки</div>
       </div>
       <div id="catHead" style="display:none;align-items:center;width:100%">
         <button class="back-btn" id="catBack">← Назад</button>
@@ -488,7 +492,6 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <button type="button" class="chart-tool active" id="calcBuyMode">Покупка</button>
           <button type="button" class="chart-tool" id="calcSellMode">Продажа</button>
           <button type="button" class="chart-tool" id="calcTotalSellMode">Общ. продажа</button>
-          <button type="button" class="chart-tool" id="calcPodMode">Подсчёт</button>
           <span id="calcModeHint" style="align-self:center;color:var(--muted);font-size:11px">Покупка: общая цена ÷ количество</span>
         </div>
         <div id="calcMarketBlock">
@@ -507,32 +510,75 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
             <div class="row"><span>Общая продажа на аукционе после комиссии 5%</span><b id="sumAuctionNet">—</b></div>
           </div>
         </div>
-        <div id="calcPodBlock" style="display:none">
-          <div class="sub" style="margin-bottom:8px">Свободный список: название, цвет, цена / шт. сохраняются. При сделке только впиши количество.</div>
-          <table class="calc-table" id="podTable">
-            <thead><tr>
-              <th style="width:28%">Предмет</th>
-              <th style="width:12%">Цвет</th>
-              <th style="width:18%">Цена / шт.</th>
-              <th style="width:14%">Кол-во</th>
-              <th style="width:18%">Сумма</th>
-              <th></th>
-            </tr></thead>
-            <tbody id="podBody"></tbody>
-          </table>
-          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
-            <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
-            <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
-            <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
+      </div>
+      <div id="perekupPane" style="display:none">
+        <div class="sub" style="margin-bottom:8px">Быстрый подсчёт для перекупа: название, цвет, цена / шт. сохраняются. При сделке только впиши количество.</div>
+        <table class="calc-table" id="podTable">
+          <thead><tr>
+            <th style="width:28%">Предмет</th>
+            <th style="width:12%">Цвет</th>
+            <th style="width:18%">Цена / шт.</th>
+            <th style="width:14%">Кол-во</th>
+            <th style="width:18%">Сумма</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="podBody"></tbody>
+        </table>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
+          <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
+          <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
+        </div>
+        <div class="calc-sum" style="margin-top:12px">
+          <div class="row"><span>Общая сумма (без комиссии)</span>
+            <b id="podSum" class="pod-copy" title="Нажми, чтобы скопировать" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
           </div>
-          <div class="calc-sum" style="margin-top:12px">
-            <div class="row"><span>Общая сумма (без комиссии)</span>
-              <b id="podSum" class="pod-copy" title="Нажми, чтобы скопировать" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
+          <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
+          <div class="sub" style="margin-top:4px">Кликни по сумме или по сумме строки — скопируется число</div>
+        </div>
+      </div>
+      <div id="dealsPane" style="display:none">
+        <div class="sub" style="margin-bottom:8px">Журнал сделок: купил → продал на аукционе (−5% комиссия). История хранится у тебя в браузере.</div>
+        <div class="calc-search" style="margin-bottom:10px">
+          <input id="dealQ" placeholder="Найти предмет по названию..." autocomplete="off">
+          <div class="suggest" id="dealSuggest"></div>
+        </div>
+        <div id="dealForm" class="sell-calc" style="margin-bottom:12px">
+          <div class="sell-calc-title">Новая сделка</div>
+          <div style="margin-bottom:8px;font-weight:600" id="dealItemName">Предмет не выбран</div>
+          <input type="hidden" id="dealItemId" value="">
+          <div class="sell-calc-grid" style="grid-template-columns:1fr 1fr 1fr;gap:8px">
+            <div>
+              <label>Купил за</label>
+              <input type="text" inputmode="decimal" id="dealBuy" placeholder="Сумма покупки" autocomplete="off">
             </div>
-            <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
-            <div class="sub" style="margin-top:4px">Кликни по сумме или по сумме строки — скопируется число</div>
+            <div>
+              <label>Продал на аукционе за</label>
+              <input type="text" inputmode="decimal" id="dealSell" placeholder="Цена лота" autocomplete="off">
+            </div>
+            <div>
+              <label>После −5%</label>
+              <div id="dealNetPreview" style="padding:6px 0;font-weight:700;color:var(--muted)">—</div>
+            </div>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <div style="font-size:12px">Профит: <b id="dealProfitPreview">—</b></div>
+            <button type="button" class="btn primary" id="dealAddBtn">Добавить сделку</button>
           </div>
         </div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="chart-tool active" id="dealFilterAll">Все</button>
+          <button type="button" class="chart-tool" id="dealFilterToday">Сегодня</button>
+          <button type="button" class="chart-tool" id="dealFilterPlus">Только плюс</button>
+          <button type="button" class="chart-tool" id="dealFilterMinus">Только минус</button>
+          <button type="button" class="btn" id="dealClearAll" style="margin-left:auto">Очистить историю</button>
+        </div>
+        <div class="calc-sum" style="margin-bottom:10px">
+          <div class="row"><span>Итого (все / фильтр)</span><b id="dealTotal" class="pod-copy" title="Кликни — скопировать" style="cursor:pointer">—</b></div>
+          <div class="row sub"><span>Сделок</span><b id="dealCount">0</b></div>
+          <div class="row sub"><span>Сегодня</span><b id="dealTodayTotal">—</b></div>
+        </div>
+        <div id="dealsList"><div class="empty">Пока нет сделок</div></div>
       </div>
     </div>
   </div>
@@ -552,7 +598,7 @@ const $=id=>document.getElementById(id);
 let rows=[],filter="all",sortBy="new",activeId=null,catFilter="",rightTab="catalog";
 let activeCategory=null;
 let calcIds=JSON.parse(localStorage.getItem("sz_calc")||"[]");
-let calcMode=localStorage.getItem("sz_calc_mode")||"buy";
+let calcMode=(()=>{ const m=localStorage.getItem("sz_calc_mode")||"buy"; return m==="pod"?"buy":m; })();
 let calcBuyPrices=JSON.parse(localStorage.getItem("sz_calc_buy_prices")||"{}");
 let calcBuyQty=JSON.parse(localStorage.getItem("sz_calc_buy_qty")||"{}");
 let calcSellPrices=JSON.parse(localStorage.getItem("sz_calc_sell_prices")||"{}");
@@ -1254,22 +1300,17 @@ function recalcCalc(){
   $("calcDetails").innerHTML=details.join("");
 }
 function updateCalcMode(){
-  const buy=calcMode==="buy", sell=calcMode==="sell", total=calcMode==="totalSell", pod=calcMode==="pod";
+  const buy=calcMode==="buy", sell=calcMode==="sell", total=calcMode==="totalSell";
   $("calcBuyMode")?.classList.toggle("active", buy);
   $("calcSellMode")?.classList.toggle("active", sell);
   $("calcTotalSellMode")?.classList.toggle("active", total);
-  $("calcPodMode")?.classList.toggle("active", pod);
   if($("calcModeHint")){
-    $("calcModeHint").textContent=pod
-      ?"Подсчёт: название + цвет + цена/шт. × кол-во, без комиссии"
-      :buy?"Покупка: общая цена ÷ количество"
+    $("calcModeHint").textContent=buy
+      ?"Покупка: общая цена ÷ количество"
       :sell?"Продажа: цена за 1 шт. × количество"
       :"Общ. продажа: общая цена ÷ количество, аукцион −5%";
   }
-  const market=$("calcMarketBlock"), podBlock=$("calcPodBlock");
-  if(market) market.style.display=pod?"none":"block";
-  if(podBlock) podBlock.style.display=pod?"block":"none";
-  if(pod) return;
+  if($("calcMarketBlock")) $("calcMarketBlock").style.display="block";
   if($("calcHead")){
     $("calcHead").innerHTML=buy
       ?"<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>"
@@ -1435,6 +1476,162 @@ function podAddRow(){
     if(last) last.focus();
   });
 }
+
+/* ===== Сделки (журнал перекупа) ===== */
+let dealsList=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_deals")||"[]"); }catch{ return []; } })();
+if(!Array.isArray(dealsList)) dealsList=[];
+let dealFilter="all"; // all | today | plus | minus
+function saveDeals(){ try{ localStorage.setItem("sz_deals", JSON.stringify(dealsList)); }catch{} }
+function dealProfit(buy, sell){
+  const b=calcNum(buy), s=calcNum(sell);
+  if(!Number.isFinite(b)||!Number.isFinite(s)) return NaN;
+  return Math.round(s*0.95 - b);
+}
+function isSameLocalDay(ts){
+  if(!ts) return false;
+  const d=new Date(ts), n=new Date();
+  return d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate();
+}
+function updateDealPreview(){
+  const buy=calcNum($("dealBuy")?.value), sell=calcNum($("dealSell")?.value);
+  const netEl=$("dealNetPreview"), profitEl=$("dealProfitPreview");
+  if(!netEl||!profitEl) return;
+  if(Number.isFinite(sell)&&sell>=0){
+    const net=Math.round(sell*0.95);
+    netEl.textContent=fmt(net);
+    netEl.style.color="var(--text)";
+  }else{ netEl.textContent="—"; netEl.style.color="var(--muted)"; }
+  if(Number.isFinite(buy)&&Number.isFinite(sell)){
+    const p=dealProfit(buy, sell);
+    profitEl.textContent=(p>0?"+":"")+fmt(p);
+    profitEl.style.color=p>0?"var(--green)":p<0?"var(--red)":"var(--muted)";
+  }else{ profitEl.textContent="—"; profitEl.style.color="var(--muted)"; }
+}
+function filteredDeals(){
+  return dealsList.filter(d=>{
+    const p=dealProfit(d.buy, d.sell);
+    if(dealFilter==="today" && !isSameLocalDay(d.ts)) return false;
+    if(dealFilter==="plus" && !(p>0)) return false;
+    if(dealFilter==="minus" && !(p<0)) return false;
+    return true;
+  });
+}
+function renderDeals(){
+  const list=$("dealsList"); if(!list) return;
+  const items=filteredDeals();
+  let sumAll=0, sumToday=0, sumFilt=0;
+  for(const d of dealsList){
+    const p=dealProfit(d.buy, d.sell);
+    if(!Number.isFinite(p)) continue;
+    sumAll+=p;
+    if(isSameLocalDay(d.ts)) sumToday+=p;
+  }
+  for(const d of items){
+    const p=dealProfit(d.buy, d.sell);
+    if(Number.isFinite(p)) sumFilt+=p;
+  }
+  const totalEl=$("dealTotal");
+  if(totalEl){
+    totalEl.textContent=items.length?((sumFilt>0?"+":"")+fmt(sumFilt)):"—";
+    totalEl.style.color=sumFilt>0?"var(--green)":sumFilt<0?"var(--red)":"var(--neon2)";
+    totalEl.dataset.raw=String(Math.round(sumFilt));
+  }
+  if($("dealCount")) $("dealCount").textContent=String(items.length);
+  if($("dealTodayTotal")){
+    $("dealTodayTotal").textContent=dealsList.some(d=>isSameLocalDay(d.ts))?((sumToday>0?"+":"")+fmt(sumToday)):"—";
+    $("dealTodayTotal").style.color=sumToday>0?"var(--green)":sumToday<0?"var(--red)":"var(--muted)";
+  }
+  ["dealFilterAll","dealFilterToday","dealFilterPlus","dealFilterMinus"].forEach(id=>{
+    const el=$(id); if(!el) return;
+    const map={dealFilterAll:"all",dealFilterToday:"today",dealFilterPlus:"plus",dealFilterMinus:"minus"};
+    el.classList.toggle("active", dealFilter===map[id]);
+  });
+  if(!items.length){
+    list.innerHTML=`<div class="empty">Пока нет сделок${dealFilter!=="all"?" по фильтру":""}</div>`;
+    return;
+  }
+  list.innerHTML=items.map(d=>{
+    const p=dealProfit(d.buy, d.sell);
+    const net=Math.round(calcNum(d.sell)*0.95);
+    const col=p>0?"var(--green)":p<0?"var(--red)":"var(--muted)";
+    const when=d.ts?new Date(d.ts).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+    return `<div class="calc-item-info" style="margin-bottom:8px">
+      <div class="title" style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+        <span>${esc(d.name||d.itemId||"?")}</span>
+        <button type="button" class="rm deal-rm" data-id="${esc(d.id)}" title="Удалить">×</button>
+      </div>
+      <div class="info-row"><span>Купил</span><b>${fmt(d.buy)}</b></div>
+      <div class="info-row"><span>Продал (лот)</span><b>${fmt(d.sell)}</b></div>
+      <div class="info-row"><span>После −5%</span><b>${fmt(net)}</b></div>
+      <div class="info-row"><span>Профит</span><b style="color:${col}">${(p>0?"+":"")}${fmt(p)}</b></div>
+      <div class="info-row"><span>Когда</span><b class="sub" style="font-weight:400">${when}</b></div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll(".deal-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      dealsList=dealsList.filter(x=>x.id!==btn.dataset.id);
+      saveDeals(); renderDeals();
+    };
+  });
+}
+function addDealFromForm(){
+  const itemId=($("dealItemId")?.value||"").trim();
+  const name=($("dealItemName")?.textContent||"").trim();
+  const buy=($("dealBuy")?.value||"").trim();
+  const sell=($("dealSell")?.value||"").trim();
+  const b=calcNum(buy), s=calcNum(sell);
+  if(!itemId && name==="Предмет не выбран"){ alert("Выбери предмет из поиска"); return; }
+  if(!Number.isFinite(b)||b<0){ alert("Укажи сумму покупки"); return; }
+  if(!Number.isFinite(s)||s<0){ alert("Укажи цену продажи на аукционе"); return; }
+  dealsList.unshift({
+    id:"d"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+    itemId: itemId||"",
+    name: (name && name!=="Предмет не выбран")?name:(itemId||"Без названия"),
+    buy: String(Math.round(b)),
+    sell: String(Math.round(s)),
+    ts: new Date().toISOString()
+  });
+  saveDeals();
+  if($("dealBuy")) $("dealBuy").value="";
+  if($("dealSell")) $("dealSell").value="";
+  updateDealPreview();
+  renderDeals();
+}
+function updateDealSuggest(){
+  const q=($("dealQ")?.value||"").trim().toLowerCase();
+  const box=$("dealSuggest"); if(!box) return;
+  if(q.length<1){ box.classList.remove("open"); return; }
+  const hits=fuzzyFilter(rows,q,12);
+  if(!hits.length){ box.classList.remove("open"); return; }
+  box.innerHTML=hits.map(r=>`<div data-id="${esc(r.id)}" data-name="${esc(r.name||r.id)}">${esc(r.name||r.id)} <span class="sub">${(r.lots||0)>0?fmt(r.min_price):"нет лотов"}</span></div>`).join("");
+  box.classList.add("open");
+  box.querySelectorAll("div").forEach(d=>{
+    d.onclick=()=>{
+      $("dealItemId").value=d.dataset.id||"";
+      $("dealItemName").textContent=d.dataset.name||d.dataset.id||"";
+      $("dealItemName").style.color="var(--neon2)";
+      $("dealQ").value="";
+      box.classList.remove("open");
+      $("dealBuy")?.focus();
+    };
+  });
+}
+function showRightTab(tab){
+  rightTab=tab;
+  activeCategory=null;
+  $("catHead").style.display="none";
+  $("mainTabs").style.display="flex";
+  document.querySelectorAll("#mainTabs .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
+  if($("catalogPane")) $("catalogPane").style.display=tab==="catalog"?"block":"none";
+  if($("catItemsPane")) $("catItemsPane").style.display="none";
+  if($("calcPane")) $("calcPane").style.display=tab==="calc"?"block":"none";
+  if($("perekupPane")) $("perekupPane").style.display=tab==="perekup"?"block":"none";
+  if($("dealsPane")) $("dealsPane").style.display=tab==="deals"?"block":"none";
+  if(tab==="catalog") renderCatalog();
+  if(tab==="calc") renderCalc();
+  if(tab==="perekup") renderPod();
+  if(tab==="deals") renderDeals();
+}
 function renderCalc(opts){
   const skipPersist=!!(opts&&opts.skipPersist);
   const body=$("calcBody");
@@ -1442,10 +1639,6 @@ function renderCalc(opts){
     persistVisibleCalcInputs(body.dataset.mode);
   }
   updateCalcMode();
-  if(calcMode==="pod"){
-    renderPod(opts);
-    return;
-  }
   const state=calcStoresFor(calcMode);
   const focused=document.activeElement;
   const isFocused=focused&&focused.matches&&focused.matches("#calcBody input[data-qty-id],#calcBody input[data-price-id]");
@@ -1775,10 +1968,7 @@ async function openItem(id,silent){
     }
     updateSellCalc();
     const addBtn=$("addToCalc");
-    if(addBtn)addBtn.onclick=()=>{if(!calcIds.includes(id))calcIds.push(id);saveCalc();rightTab="calc";
-      document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab==="calc"));
-      $("catalogPane").style.display="none";$("catItemsPane").style.display="none";$("calcPane").style.display="block";
-      $("mainTabs").style.display="flex";$("catHead").style.display="none";renderCalc()};
+    if(addBtn)addBtn.onclick=()=>{if(!calcIds.includes(id))calcIds.push(id);saveCalc();showRightTab("calc")};
     const lotFilter=$("lotPriceFilter");
     if(lotFilter){
       const applyLotFilter=()=>{
@@ -1939,6 +2129,8 @@ async function load(forceFull){
       renderHunt();
       if(rightTab==="catalog") renderCatalog();
       if(rightTab==="calc") renderCalc();
+      if(rightTab==="perekup") renderPod();
+      if(rightTab==="deals") renderDeals();
       requestAnimationFrame(()=>restoreScrollState(scrollState));
     } else if(changed && drawerOpen){
       // only update in-memory; fav strip quietly if needed
@@ -1960,7 +2152,6 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classLi
 $("calcBuyMode").onclick=()=>switchCalcMode("buy");
 $("calcSellMode").onclick=()=>switchCalcMode("sell");
 $("calcTotalSellMode").onclick=()=>switchCalcMode("totalSell");
-$("calcPodMode")?.addEventListener("click",()=>switchCalcMode("pod"));
 $("podAddRow")?.addEventListener("click",()=>podAddRow());
 $("podClearQty")?.addEventListener("click",()=>{
   for(const r of podRows) r.qty="";
@@ -1975,6 +2166,28 @@ $("podSum")?.addEventListener("click",()=>{
   const n=Number($("podSum").dataset.raw);
   if(Number.isFinite(n)) copyPlainNumber(n, $("podSum"));
 });
+$("dealQ")?.addEventListener("input", updateDealSuggest);
+$("dealBuy")?.addEventListener("input", updateDealPreview);
+$("dealSell")?.addEventListener("input", updateDealPreview);
+$("dealAddBtn")?.addEventListener("click", addDealFromForm);
+$("dealFilterAll")?.addEventListener("click",()=>{ dealFilter="all"; renderDeals(); });
+$("dealFilterToday")?.addEventListener("click",()=>{ dealFilter="today"; renderDeals(); });
+$("dealFilterPlus")?.addEventListener("click",()=>{ dealFilter="plus"; renderDeals(); });
+$("dealFilterMinus")?.addEventListener("click",()=>{ dealFilter="minus"; renderDeals(); });
+$("dealClearAll")?.addEventListener("click",()=>{
+  if(!dealsList.length) return;
+  if(!confirm("Удалить всю историю сделок?")) return;
+  dealsList=[]; saveDeals(); renderDeals();
+});
+$("dealTotal")?.addEventListener("click",()=>{
+  const n=Number($("dealTotal").dataset.raw);
+  if(Number.isFinite(n)) copyPlainNumber(n, $("dealTotal"));
+});
+document.addEventListener("click",e=>{
+  if(!e.target.closest(".calc-search")){
+    $("dealSuggest")?.classList.remove("open");
+  }
+});
 $("calcQ").oninput=updateCalcSuggest;
 $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
@@ -1985,16 +2198,9 @@ document.querySelectorAll(".chips .chip").forEach(c=>{
     c.classList.add("active");filter=c.dataset.f;renderCards();
   };
 });
-document.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));t.classList.add("active");
-  rightTab=t.dataset.tab;activeCategory=null;
-  $("catHead").style.display="none";$("mainTabs").style.display="flex";
-  $("catalogPane").style.display=rightTab==="catalog"?"block":"none";
-  $("catItemsPane").style.display="none";
-  $("calcPane").style.display=rightTab==="calc"?"block":"none";
-  if(rightTab==="catalog")renderCatalog();
-  if(rightTab==="calc")renderCalc();
-}});
+document.querySelectorAll("#mainTabs .tab").forEach(t=>{
+  t.onclick=()=>showRightTab(t.dataset.tab);
+});
 $("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load(true);$("scanBtn").disabled=false},1200)};
 fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
 
@@ -2033,21 +2239,12 @@ function setMobileView(tab){
   }
   if(tab==="auction"){
     main.classList.remove("mobile-right");
-    rightTab="catalog"; // keep default for when expanding later
   }else{
     main.classList.add("mobile-right");
-    rightTab=tab==="calc"?"calc":"catalog";
-    document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.tab===rightTab));
-    $("catHead").style.display="none";
-    $("mainTabs").style.display="flex";
-    $("catalogPane").style.display=rightTab==="catalog"?"block":"none";
-    $("catItemsPane").style.display="none";
-    $("calcPane").style.display=rightTab==="calc"?"block":"none";
-    if(rightTab==="catalog")renderCatalog();
-    if(rightTab==="calc")renderCalc();
+    showRightTab(tab==="catalog"||tab==="calc"||tab==="perekup"||tab==="deals"?tab:"catalog");
   }
   document.querySelectorAll(".mobile-nav-item").forEach(b=>{
-    b.classList.toggle("active", b.dataset.mobileTab===tab || (tab==="catalog"&&b.dataset.mobileTab==="catalog") || (tab==="calc"&&b.dataset.mobileTab==="calc"));
+    b.classList.toggle("active", b.dataset.mobileTab===tab);
   });
   closeMobileNav();
 }
