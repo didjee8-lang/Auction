@@ -858,7 +858,8 @@ async function refreshFavoriteLots(force=false){
       r.avg_price=x.avgPrice??null;
       r.totalAmount=x.totalAmount??null;
       r.lastSale=x.lastSale??r.lastSale??null;
-      r.ts=x.ts||r.ts;
+      // НЕ трогаем r.ts — иначе избранное при каждом live-обновлении
+      // получает «свежее» время и уезжает наверх ленты аукциона
     }
     const favScrollState=saveScrollState();
     renderFavs();
