@@ -443,6 +443,18 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .deal-custom-box .sell-calc-grid{grid-template-columns:1fr 1fr;gap:8px}
 @media(min-width:700px){.deal-custom-box .sell-calc-grid{grid-template-columns:1fr 1fr 1fr 1fr}}
 
+
+/* Staggered appear for new auction cards */
+.pcard.pcard-enter{
+  opacity:0;
+  transform:translateY(10px) scale(.96);
+  animation:pcardIn .28s ease-out forwards;
+}
+@keyframes pcardIn{
+  to{opacity:1;transform:translateY(0) scale(1)}
+}
+.pcard.pcard-patch{transition:border-color .2s,box-shadow .2s}
+
 </style>
 </head>
 <body>
@@ -1184,39 +1196,132 @@ function iconHtml(id,name){
     onerror="this.style.visibility='hidden'"
     onload="this.style.visibility='visible'">`;
 }
-function renderCards(){
+
+/* --- smooth auction updates (no micro-freeze) --- */
+let _auctionRenderedIds=[];
+let _pendingAuctionList=null;
+let _userBusyUntil=0;
+function markUserBusy(ms){
+  _userBusyUntil=Math.max(_userBusyUntil, Date.now()+(ms||800));
+}
+function isUserBusy(){
+  if(Date.now()<_userBusyUntil) return true;
+  const ae=document.activeElement;
+  if(!ae) return false;
+  const tag=ae.tagName;
+  if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT") return true;
+  if(ae.isContentEditable) return true;
+  return false;
+}
+function cardSig(r){
+  return [r.min_price,r.minUnitPrice,r.lots,r.status,r.profit,r.profitPct,r.lastSale,isFav(r.id)?1:0,r.id===activeId?1:0].join("|");
+}
+function cardHtml(r){
+  const tier=tierBadge(r);
+  const hasLots=(r.lots||0)>0;
+  const cls=["pcard",r.id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
+  const profitLine=r.profit!=null?`<div class="pcard-profit ${r.profit>=0?"pos":"neg"}">${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)</div>`:"";
+  const favOn=isFav(r.id);
+  const priceTxt=hasLots
+    ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
+    : (r.lastSale!=null?`<span style="color:var(--muted)">посл. ${fmt(r.lastSale)}</span>`:"—");
+  return`<div class="${cls}" data-id="${esc(r.id)}" data-sig="${esc(cardSig(r))}">
+    <button class="pcard-excl" data-excl="${esc(r.id)}" title="В исключения">−</button>
+    <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
+    <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+    <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(r.name||r.id)}</div>
+    <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}</div>
+    <div class="pcard-price">${priceTxt}</div>
+    <div class="pcard-qty"><b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b></div>
+    ${profitLine}
+    <div class="pcard-status">${statusBadge(r)}</div>
+  </div>`;
+}
+function bindCardEvents(root){
+  const box=root||$("cards");
+  if(!box) return;
+  box.querySelectorAll(".pcard").forEach(el=>{
+    if(el._bound) return;
+    el._bound=true;
+    el.onclick=e=>{if(e.target.closest("[data-fav],[data-excl]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)};
+  });
+  box.querySelectorAll("[data-fav]").forEach(btn=>{
+    if(btn._bound) return;
+    btn._bound=true;
+    btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)};
+  });
+  box.querySelectorAll("[data-excl]").forEach(btn=>{
+    if(btn._bound) return;
+    btn._bound=true;
+    btn.onclick=e=>{e.stopPropagation();addExclude(btn.dataset.excl)};
+  });
+}
+function patchCardEl(el, r){
+  const sig=cardSig(r);
+  if(el.dataset.sig===sig) return false;
+  el.dataset.sig=sig;
+  el.classList.toggle("active", r.id===activeId);
+  el.classList.toggle("cheap", r.status==="cheap");
+  el.classList.toggle("expensive", r.status==="expensive");
+  const tier=tierBadge(r);
+  const hasLots=(r.lots||0)>0;
+  const nameEl=el.querySelector(".pcard-name");
+  if(nameEl){
+    nameEl.style.color=r.qltColor||(tier?tier.color:"var(--text)");
+    nameEl.textContent=r.name||r.id;
+  }
+  const rar=el.querySelector(".pcard-rarity");
+  if(rar){
+    rar.innerHTML=`${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}`;
+  }
+  const priceEl=el.querySelector(".pcard-price");
+  if(priceEl){
+    priceEl.innerHTML=hasLots
+      ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
+      : (r.lastSale!=null?`<span style="color:var(--muted)">посл. ${fmt(r.lastSale)}</span>`:"—");
+  }
+  const qtyEl=el.querySelector(".pcard-qty");
+  if(qtyEl) qtyEl.innerHTML=`<b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b>`;
+  let profitEl=el.querySelector(".pcard-profit");
+  if(r.profit!=null){
+    const html=`${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)`;
+    if(!profitEl){
+      profitEl=document.createElement("div");
+      profitEl.className="pcard-profit";
+      const st=el.querySelector(".pcard-status");
+      if(st) el.insertBefore(profitEl, st); else el.appendChild(profitEl);
+    }
+    profitEl.className=`pcard-profit ${r.profit>=0?"pos":"neg"}`;
+    profitEl.textContent=html;
+  } else if(profitEl){
+    profitEl.remove();
+  }
+  const stEl=el.querySelector(".pcard-status");
+  if(stEl) stEl.innerHTML=statusBadge(r)||"";
+  const favBtn=el.querySelector("[data-fav]");
+  if(favBtn){
+    const on=isFav(r.id);
+    favBtn.classList.toggle("on", on);
+    favBtn.textContent=on?"★":"☆";
+    favBtn.title=on?"Убрать из избранного":"В избранное";
+  }
+  return true;
+}
+function getAuctionList(){
   const q=($("q").value||"").trim().toLowerCase();
-  // mode: exclusions list
   if(filter==="excl"){
     let list=excludeIds.map(id=>rows.find(r=>r.id===id)||{id,name:id,lots:0});
-    if(q)list=fuzzyFilter(list,q);
-    $("activeCnt").textContent=list.length?`(${list.length})`:"";
-    if(!list.length){$("cards").innerHTML=`<div class="empty" style="grid-column:1/-1">Исключений нет. Нажми «−» на карточке</div>`;return}
-    $("cards").innerHTML=list.map(r=>{
-      const tier=tierBadge(r);
-      return`<div class="pcard" data-id="${r.id}">
-        <button class="pcard-excl" data-unexcl="${esc(r.id)}" title="Вернуть">+</button>
-        <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
-        <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
-        <div class="pcard-price">${(r.lots||0)>0?fmt(r.minUnitPrice??r.min_price):"—"}</div>
-        <div class="pcard-status"><span class="badge m">Исключён</span></div>
-      </div>`;
-    }).join("");
-    $("cards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-unexcl]"))return;openItem(el.dataset.id)});
-    $("cards").querySelectorAll("[data-unexcl]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();removeExclude(btn.dataset.unexcl)});
-    return;
+    if(q) list=fuzzyFilter(list,q);
+    return {mode:"excl", list};
   }
-  // Hardcoded trade ids — show even if API forgot priority flag or 0 lots
   const HARD_PRIORITY=new Set(["8AjTFOVB","cpe1d8xz","kJD59qaP","rdt1m5ve","55VrA59M","WdVYNOia","nb0OaSNs","rA8fsgH1","skuTyVhI","vKJbSN93","vpxznHgV"]);
   const isPrio=r=>!!(r.priority || HARD_PRIORITY.has(r.id) || HARD_PRIORITY.has(String(r.id||"").replace(/@q\d+$/,"")) || isFav(r.id));
-  // Show lots OR priority trade goods even with 0 lots
   let list=rows.filter(r=>((r.lots||0)>0 || isPrio(r)) && !isExcl(r.id));
-  // category filter must NEVER hide priority items (season pass lives in other/useful)
-  if(selectedCats.length)list=list.filter(r=>isPrio(r) || selectedCats.includes(itemCat(r)));
-  if(filter==="cheap")list=list.filter(r=>r.status==="cheap"||isPrio(r));
-  else if(filter==="expensive")list=list.filter(r=>r.status==="expensive"||isPrio(r));
-  else if(filter==="liquid")list=list.filter(r=>(r.sales7d||0)>=3||(r.salesToday||0)>=1||(r.soldPerDay||0)>=1||isPrio(r));
-  else if(filter==="nodata")list=list.filter(r=>!r.dataOk||isPrio(r));
+  if(selectedCats.length) list=list.filter(r=>isPrio(r) || selectedCats.includes(itemCat(r)));
+  if(filter==="cheap") list=list.filter(r=>r.status==="cheap"||isPrio(r));
+  else if(filter==="expensive") list=list.filter(r=>r.status==="expensive"||isPrio(r));
+  else if(filter==="liquid") list=list.filter(r=>(r.sales7d||0)>=3||(r.salesToday||0)>=1||(r.soldPerDay||0)>=1||isPrio(r));
+  else if(filter==="nodata") list=list.filter(r=>!r.dataOk||isPrio(r));
   if(q){
     const ql=q.toLowerCase();
     const aliases=ql.includes("пропуск")||ql.includes("pass")||ql.includes("бп")||ql.includes("battle")||ql.includes("сезон");
@@ -1237,7 +1342,6 @@ function renderCards(){
   if(sortBy==="profit"){
     list.sort((a,b)=>(b.profitPct??-999)-(a.profitPct??-999));
   } else {
-    // Stable newest-first: bucket by minute so tiny ts noise doesn't reshuffle cards every poll
     list.sort((a,b)=>{
       const ta=a.ts?Math.floor(new Date(a.ts).getTime()/60000):0;
       const tb=b.ts?Math.floor(new Date(b.ts).getTime()/60000):0;
@@ -1247,33 +1351,113 @@ function renderCards(){
       return String(a.id||"").localeCompare(String(b.id||""));
     });
   }
-  $("activeCnt").textContent=list.length?`(${list.length})`:"";
-  if(!list.length){$("cards").innerHTML=`<div class="empty" style="grid-column:1/-1">Нет лотов. Нажми «Сканировать» или смени фильтр</div>`;return}
-  $("cards").innerHTML=list.map(r=>{
-    const tier=tierBadge(r);
-    const hasLots=(r.lots||0)>0;
-    const cls=["pcard",r.id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
-    const profitLine=r.profit!=null?`<div class="pcard-profit ${r.profit>=0?"pos":"neg"}">${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)</div>`:"";
-    const favOn=isFav(r.id);
-    const priceTxt=hasLots
-      ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
-      : (r.lastSale!=null?`<span style="color:var(--muted)">посл. ${fmt(r.lastSale)}</span>`:"—");
-    return`<div class="${cls}" data-id="${r.id}">
-      <button class="pcard-excl" data-excl="${esc(r.id)}" title="В исключения">−</button>
-      <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
-      <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
-      <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(r.name||r.id)}</div>
-      <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}</div>
-      <div class="pcard-price">${priceTxt}</div>
-      <div class="pcard-qty"><b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b></div>
-      ${profitLine}
-      <div class="pcard-status">${statusBadge(r)}</div>
-    </div>`;
-  }).join("");
-  $("cards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav],[data-excl]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
-  $("cards").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
-  $("cards").querySelectorAll("[data-excl]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();addExclude(btn.dataset.excl)});
+  return {mode:"main", list};
 }
+function paintAuctionList(list, mode, opts){
+  const box=$("cards");
+  if(!box) return;
+  const animateNew=!(opts&&opts.noAnim);
+  const forceFull=!!(opts&&opts.forceFull);
+  $("activeCnt").textContent=list.length?`(${list.length})`:"";
+
+  if(mode==="excl"){
+    if(!list.length){
+      box.innerHTML=`<div class="empty" style="grid-column:1/-1">Исключений нет. Нажми «−» на карточке</div>`;
+      _auctionRenderedIds=[];
+      return;
+    }
+    box.innerHTML=list.map(r=>{
+      const tier=tierBadge(r);
+      return`<div class="pcard" data-id="${esc(r.id)}">
+        <button class="pcard-excl" data-unexcl="${esc(r.id)}" title="Вернуть">+</button>
+        <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+        <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
+        <div class="pcard-price">${(r.lots||0)>0?fmt(r.minUnitPrice??r.min_price):"—"}</div>
+        <div class="pcard-status"><span class="badge m">Исключён</span></div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-unexcl]"))return;openItem(el.dataset.id)});
+    box.querySelectorAll("[data-unexcl]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();removeExclude(btn.dataset.unexcl)});
+    _auctionRenderedIds=list.map(r=>r.id);
+    return;
+  }
+
+  if(!list.length){
+    box.innerHTML=`<div class="empty" style="grid-column:1/-1">Нет лотов. Нажми «Сканировать» или смени фильтр</div>`;
+    _auctionRenderedIds=[];
+    return;
+  }
+
+  const nextIds=list.map(r=>r.id);
+  const prevIds=_auctionRenderedIds;
+  const sameOrder=!forceFull && prevIds.length===nextIds.length && prevIds.every((id,i)=>id===nextIds[i]);
+  const existingMap=new Map();
+  box.querySelectorAll(".pcard[data-id]").forEach(el=>existingMap.set(el.dataset.id, el));
+
+  if(sameOrder && existingMap.size===list.length){
+    for(const r of list){
+      const el=existingMap.get(r.id);
+      if(el) patchCardEl(el, r);
+    }
+    _auctionRenderedIds=nextIds;
+    return;
+  }
+
+  const nextSet=new Set(nextIds);
+  for(const [id,el] of existingMap){
+    if(!nextSet.has(id)) el.remove();
+  }
+  const frag=document.createDocumentFragment();
+  let newCount=0;
+  const maxStagger=8;
+  const staggerMs=40;
+
+  list.forEach((r)=>{
+    let el=existingMap.get(r.id);
+    if(el){
+      patchCardEl(el, r);
+      el.classList.remove("pcard-enter");
+      el.style.animationDelay="";
+      frag.appendChild(el);
+    } else {
+      const wrap=document.createElement("div");
+      wrap.innerHTML=cardHtml(r);
+      el=wrap.firstElementChild;
+      if(animateNew && newCount<maxStagger){
+        el.classList.add("pcard-enter");
+        el.style.animationDelay=(newCount*staggerMs)+"ms";
+        newCount++;
+        el.addEventListener("animationend",()=>{
+          el.classList.remove("pcard-enter");
+          el.style.animationDelay="";
+        },{once:true});
+      }
+      frag.appendChild(el);
+    }
+  });
+  box.querySelectorAll(".empty").forEach(e=>e.remove());
+  // remove children that weren't moved into frag
+  while(box.firstChild) box.removeChild(box.firstChild);
+  box.appendChild(frag);
+  bindCardEvents(box);
+  _auctionRenderedIds=nextIds;
+}
+function renderCards(opts){
+  const {mode, list}=getAuctionList();
+  if(opts&&opts.fromPoll && isUserBusy() && mode==="main"){
+    _pendingAuctionList={mode, list, opts};
+    return;
+  }
+  paintAuctionList(list, mode, opts);
+}
+function flushPendingAuction(){
+  if(!_pendingAuctionList) return;
+  if(isUserBusy()) return;
+  const p=_pendingAuctionList;
+  _pendingAuctionList=null;
+  paintAuctionList(p.list, p.mode, Object.assign({}, p.opts||{}, {noAnim:true}));
+}
+
 function showCatList(){
   activeCategory=null;
   $("catalogPane").style.display="block";
@@ -2626,36 +2810,38 @@ async function load(forceFull){
       }
     })();
 
-    const scrollState=saveScrollState();
     const sig=marketSig(rows);
     const changed=sig!==lastCardsSig;
-    lastCardsSig=sig;
+    if(changed) lastCardsSig=sig;
 
-    // While drawer is open — never rebuild auction grid (stops jump/scroll reset)
     const drawerOpen=$("drawer")?.classList.contains("open");
+    // Background poll: only touch auction/favs — never rebuild calc/pod/deals/catalog chips
     if((changed || forceFull) && !drawerOpen){
-      renderCatChips();
-      renderTplBar();
-      renderCards();
-      renderFavs();
-      renderHunt();
-      if(rightTab==="catalog") renderCatalog();
-      if(rightTab==="calc") renderCalc();
-      if(rightTab==="perekup") renderPod();
-      if(rightTab==="deals") renderDeals();
-      requestAnimationFrame(()=>restoreScrollState(scrollState));
+      if(forceFull){
+        renderCatChips();
+        renderTplBar();
+      }
+      // Incremental patch; defers if user is typing/scrolling
+      renderCards({fromPoll: !forceFull, forceFull: !!forceFull, noAnim: false});
+      // Fav strip: light update only when not busy
+      if(!isUserBusy()){
+        renderFavs();
+        if(($("huntQ")?.value||"").trim()) renderHunt();
+      }
+      // Catalog prices only if catalog visible and idle
+      if(forceFull && rightTab==="catalog" && !isUserBusy()) renderCatalog();
     } else if(changed && drawerOpen){
-      // only update in-memory; fav strip quietly if needed
       lastCardsSig=sig;
     }
-    if(!drawerOpen) refreshFavoriteLots();
+    // Fav live: interval handles it; on force scan still nudge once
+    if(!drawerOpen && forceFull) refreshFavoriteLots(true);
   }catch(e){
     if(!$("cards").querySelector(".pcard"))
       $("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`;
   }finally{ loadBusy=false; }
 }
 async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
-$("q").oninput=()=>renderCards();
+// search input bound below with markUserBusy
 $("huntQ").oninput=renderHunt;$("huntPrice").oninput=renderHunt;
 $("catQ").oninput=()=>{catFilter=$("catQ").value;renderCatalog()};
 $("catBack").onclick=()=>showCatList();
@@ -2816,14 +3002,27 @@ window.addEventListener("resize",()=>{
 
 
 load(true);updateStatus();
-setInterval(()=>load(false),10000);
-setInterval(()=>{ if(!$("drawer")?.classList.contains("open")) refreshFavoriteLots(); },3000);
-setInterval(updateStatus,5000);
-// Keep drawer body scroll position remembered while user scrolls
+// Без искусственного КД: частый опрос, защита от лагов — инкрементальный DOM + isUserBusy
+setInterval(()=>load(false), 3500);
+setInterval(()=>{
+  if($("drawer")?.classList.contains("open")) return;
+  refreshFavoriteLots();
+}, 2000);
+setInterval(updateStatus, 5000);
+setInterval(flushPendingAuction, 250);
+// Mark interaction so background polls don't freeze typing/scroll
+document.addEventListener("pointerdown",()=>markUserBusy(600),{passive:true});
+document.addEventListener("touchstart",()=>markUserBusy(700),{passive:true});
+document.addEventListener("keydown",()=>markUserBusy(900),{passive:true});
 document.addEventListener("scroll",e=>{
   const t=e.target;
   if(t && (t.id==="dBody" || t.classList?.contains("drawer-body"))) window._drawerBodyScroll=t.scrollTop;
+  markUserBusy(500);
 },true);
+const _qEl=$("q");
+if(_qEl){
+  _qEl.addEventListener("input",()=>{ markUserBusy(1000); renderCards({noAnim:true, forceFull:true}); });
+}
 </script>
 </body>
 </html>
