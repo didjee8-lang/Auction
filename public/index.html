@@ -407,6 +407,42 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   #rightHead{flex-wrap:wrap}
 }
 
+
+/* Drag handle for Перекуп rows */
+.pod-drag{
+  cursor:grab;touch-action:none;color:var(--muted);font-size:15px;line-height:1;
+  padding:6px 4px;user-select:none;-webkit-user-select:none;width:24px;text-align:center;
+  letter-spacing:-1px;opacity:.75;border:none;background:transparent;display:inline-flex;
+  align-items:center;justify-content:center;
+}
+.pod-drag:hover{color:var(--neon2);opacity:1}
+.pod-drag:active,.pod-dragging .pod-drag{cursor:grabbing;color:var(--neon)}
+#podBody tr.pod-dragging{opacity:.5;background:rgba(255,42,42,.06)}
+#podBody tr.pod-drop-before td{box-shadow:inset 0 2px 0 0 var(--neon)}
+#podBody tr.pod-drop-after td{box-shadow:inset 0 -2px 0 0 var(--neon)}
+#podTable th.pod-drag-th,#podTable td.pod-drag-td{width:28px;padding-left:4px;padding-right:2px}
+/* Catalog type filters */
+.cat-filters{
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px;
+  padding:8px;background:var(--card);border:1px solid var(--border);border-radius:10px;
+}
+.cat-filters .fl{font-size:10px;color:var(--muted);text-transform:uppercase;white-space:nowrap}
+.cat-filters select,.cat-filters input[type="search"],.cat-filters input[type="text"]{
+  background:var(--bg);border:1px solid var(--border);color:var(--text);
+  padding:6px 8px;border-radius:7px;font-size:12px;max-width:160px;
+}
+.cat-filters select:focus,.cat-filters input:focus{
+  outline:none;border-color:var(--neon-dim);box-shadow:0 0 0 2px var(--glow);
+}
+.cat-subchips{display:flex;flex-wrap:wrap;gap:5px;width:100%}
+.cat-subchips .cat-chip{font-size:11px}
+.deal-custom-box{
+  margin-bottom:12px;padding:10px 12px;background:var(--card);
+  border:1px dashed var(--border);border-radius:10px;
+}
+.deal-custom-box .sell-calc-grid{grid-template-columns:1fr 1fr;gap:8px}
+@media(min-width:700px){.deal-custom-box .sell-calc-grid{grid-template-columns:1fr 1fr 1fr 1fr}}
+
 </style>
 </head>
 <body>
@@ -485,6 +521,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
         <div class="cat-cards" id="catCards"><div class="empty">Загрузка...</div></div>
       </div>
       <div id="catItemsPane" style="display:none">
+        <div class="cat-filters" id="catFilters" style="display:none"></div>
         <div class="cards" id="catItemsGrid"></div>
       </div>
       <div id="calcPane" style="display:none">
@@ -515,11 +552,12 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
         <div class="sub" style="margin-bottom:8px">Быстрый подсчёт для перекупа: название, цвет, цена / шт. сохраняются. При сделке только впиши количество.</div>
         <table class="calc-table" id="podTable">
           <thead><tr>
-            <th style="width:14%">Цвет</th>
-            <th style="width:28%">Предмет</th>
-            <th style="width:18%">Цена / шт.</th>
-            <th style="width:14%">Кол-во</th>
-            <th style="width:18%">Сумма</th>
+            <th class="pod-drag-th" title="Перетащить"></th>
+            <th style="width:12%">Цвет</th>
+            <th style="width:26%">Предмет</th>
+            <th style="width:16%">Цена / шт.</th>
+            <th style="width:12%">Кол-во</th>
+            <th style="width:16%">Сумма</th>
             <th></th>
           </tr></thead>
           <tbody id="podBody"></tbody>
@@ -551,10 +589,40 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
           <input id="dealQ" placeholder="Найти предмет по названию..." autocomplete="off">
           <div class="suggest" id="dealSuggest"></div>
         </div>
+        <div style="margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="btn" id="dealCustomToggle">+ Добавить свой предмет</button>
+        </div>
+        <div id="dealCustomBox" class="deal-custom-box" style="display:none">
+          <div class="sell-calc-title">Свой предмет (не из каталога)</div>
+          <div class="sell-calc-grid">
+            <div>
+              <label>Название</label>
+              <input type="text" id="dealCustomName" placeholder="Название предмета" autocomplete="off">
+            </div>
+            <div>
+              <label>Количество</label>
+              <input type="text" inputmode="numeric" id="dealCustomQty" placeholder="1" value="1" autocomplete="off">
+            </div>
+            <div>
+              <label>Купил за</label>
+              <input type="text" inputmode="decimal" id="dealCustomBuy" placeholder="Сумма покупки" autocomplete="off">
+            </div>
+            <div>
+              <label>Продал за</label>
+              <input type="text" inputmode="decimal" id="dealCustomSell" placeholder="Цена лота" autocomplete="off">
+            </div>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <div style="font-size:12px">После −5%: <b id="dealCustomNet">—</b> · Профит: <b id="dealCustomProfit">—</b></div>
+            <button type="button" class="btn primary" id="dealCustomAddBtn">Добавить сделку</button>
+            <button type="button" class="btn" id="dealCustomCancel">Отмена</button>
+          </div>
+        </div>
         <div id="dealForm" class="sell-calc" style="margin-bottom:12px">
           <div class="sell-calc-title">Новая сделка</div>
           <div style="margin-bottom:8px;font-weight:600" id="dealItemName">Предмет не выбран</div>
           <input type="hidden" id="dealItemId" value="">
+          <input type="hidden" id="dealCustomFlag" value="">
           <div class="sell-calc-grid" style="grid-template-columns:1fr 1fr 1fr;gap:8px">
             <div>
               <label>Купил за</label>
@@ -605,6 +673,14 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 const $=id=>document.getElementById(id);
 let rows=[],filter="all",sortBy="new",activeId=null,catFilter="",rightTab="catalog";
 let activeCategory=null;
+let catViewState=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_cat_view")||"{}"); }catch{ return {}; } })();
+if(!catViewState || typeof catViewState!=="object") catViewState={};
+function saveCatView(){ try{ localStorage.setItem("sz_cat_view", JSON.stringify(catViewState)); }catch{} }
+function getCatState(cat){
+  if(!catViewState[cat]) catViewState[cat]={sub:"", rarity:"", ptn:"", q:"", sort:"name"};
+  return catViewState[cat];
+}
+
 let calcIds=JSON.parse(localStorage.getItem("sz_calc")||"[]");
 let calcMode=(()=>{ const m=localStorage.getItem("sz_calc_mode")||"buy"; return m==="pod"?"buy":m; })();
 let calcBuyPrices=JSON.parse(localStorage.getItem("sz_calc_buy_prices")||"{}");
@@ -980,6 +1056,30 @@ function renderHunt(){
 }
 const QLT_RU={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
 const CAT_RU={armor:"Броня",armour:"Броня",armor_style:"Стили брони",artefact:"Артефакты",attachment:"Обвесы",backpacks:"Рюкзаки",consumables:"Расходники",containers:"Контейнеры",device:"Устройства",misc:"Разное",other:"Прочее",weapon:"Оружие",weapon_modules:"Модули оружия",weapon_style:"Стили оружия"};
+const CAT_SUB_RU={
+  // artefact types
+  biochemical:"Биохимические",electrophysical:"Электрофизические",gravity:"Гравитационные",
+  thermal:"Термальные",other_arts:"Прочие артефакты",
+  // attachment / modules
+  barrel:"Стволы",collimator_sights:"Коллиматоры",mag:"Магазины",handgrips:"Рукояти",
+  forend:"Цевья",accessory:"Аксессуары",pistol_handle:"Пист. рукояти",other:"Прочее",
+  core:"Ядра",module:"Модули",remover:"Съёмники",
+  // consumables
+  bullet:"Патроны",food:"Еда",medicine:"Медикаменты",grenade:"Гранаты",plates:"Пластины",drink:"Напитки",
+  // armor
+  clothes:"Одежда",combat:"Боевая",combined:"Комбинированная",scientist:"Научная",
+  // other
+  skins:"Скины",barter:"Бартер",hideout:"Убежище",trash:"Хлам",structures:"Постройки",
+  useful:"Полезное",boxes:"Ящики",misc:"Разное",
+  // weapon
+  assault_rifle:"Штурмовые",
+  styles:"Стили"
+};
+const RARITY_RU={
+  DEFAULT:"Обычный",RANK_NEWBIE:"Новичок",RANK_STALKER:"Сталкер",RANK_VETERAN:"Ветеран",
+  RANK_MASTER:"Мастер",RANK_LEGEND:"Легенда",QUEST_ITEM:"Квестовый","":"—"
+};
+
 function fmt(n){if(n==null||!isFinite(n))return"—";const x=Number(n);if(Number.isInteger(x))return x.toLocaleString("ru-RU")+" ₽";return x.toLocaleString("ru-RU",{maximumFractionDigits:2})+" ₽"}
 function fmtN(n){return(n==null||!isFinite(n))?"—":Number(n).toLocaleString("ru-RU")}
 function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
@@ -1180,7 +1280,165 @@ function showCatList(){
   $("catItemsPane").style.display="none";
   $("mainTabs").style.display="flex";
   $("catHead").style.display="none";
+  const cf=$("catFilters"); if(cf) cf.style.display="none";
   renderCatalog();
+}
+function itemSubCat(r){
+  const parts=String(r.category||"other").split("/");
+  return parts.length>1 ? parts.slice(1).join("/") : "";
+}
+function collectCatMeta(cat){
+  const base=rows.filter(r=>(r.category||"other").split("/")[0]===cat);
+  const subs=new Map(); // sub -> count
+  const rarities=new Set();
+  const ptns=new Set();
+  for(const r of base){
+    const sub=itemSubCat(r);
+    if(sub) subs.set(sub, (subs.get(sub)||0)+1);
+    const col=String(r.rarity||r.color||"").toUpperCase();
+    if(col) rarities.add(col);
+    if(r.minPtn!=null && Number.isFinite(Number(r.minPtn))) ptns.add(Number(r.minPtn));
+    if(r.ptn!=null && Number.isFinite(Number(r.ptn))) ptns.add(Number(r.ptn));
+  }
+  return {
+    base,
+    subs:[...subs.entries()].sort((a,b)=>a[0].localeCompare(b[0],"ru")),
+    rarities:[...rarities].sort((a,b)=>a.localeCompare(b)),
+    ptns:[...ptns].sort((a,b)=>a-b)
+  };
+}
+function renderCatFilters(cat){
+  const box=$("catFilters"); if(!box) return;
+  const st=getCatState(cat);
+  const meta=collectCatMeta(cat);
+  const isArt=cat==="artefact";
+  const isMod=cat==="attachment"||cat==="weapon_modules";
+  const isOther=cat==="other"||cat==="misc";
+  const isCons=cat==="consumables";
+  const isArmor=cat==="armor"||cat==="armour";
+  const showSub=meta.subs.length>=1 && (isArt||isMod||isOther||isCons||isArmor||cat==="weapon"||cat==="weapon_style"||cat==="armor_style");
+  const showRarity=meta.rarities.length>=1 && (isArt||isMod||isArmor||cat==="weapon"||cat==="device");
+  const showPtn=isArt && meta.ptns.length>=1;
+
+  let html="";
+  if(showSub){
+    html+=`<span class="fl">Тип</span><div class="cat-subchips" id="catSubChips">`;
+    html+=`<div class="cat-chip${st.sub===""?" on":""}" data-sub="">Все</div>`;
+    for(const [sub,cnt] of meta.subs){
+      const label=CAT_SUB_RU[sub]||CAT_SUB_RU[sub.split("/")[0]]||sub;
+      html+=`<div class="cat-chip${st.sub===sub?" on":""}" data-sub="${esc(sub)}">${esc(label)} <span class="sub">(${cnt})</span></div>`;
+    }
+    html+=`</div>`;
+  }
+  html+=`<span class="fl">Поиск</span><input type="search" id="catItemQ" placeholder="Название..." value="${esc(st.q||"")}" autocomplete="off">`;
+  if(showRarity){
+    html+=`<span class="fl">Редкость</span><select id="catRarity"><option value="">Любая</option>`;
+    for(const rr of meta.rarities){
+      html+=`<option value="${esc(rr)}"${st.rarity===rr?" selected":""}>${esc(RARITY_RU[rr]||rr)}</option>`;
+    }
+    html+=`</select>`;
+  }
+  if(showPtn){
+    html+=`<span class="fl">Заточка</span><select id="catPtn"><option value="">Любая</option>`;
+    for(const p of meta.ptns){
+      const lab=p===0?"+0":("+"+p);
+      html+=`<option value="${p}"${String(st.ptn)===String(p)?" selected":""}>${lab}</option>`;
+    }
+    html+=`</select>`;
+  }
+  html+=`<span class="fl">Сорт.</span><select id="catSort">
+    <option value="name"${st.sort==="name"?" selected":""}>По названию</option>
+    <option value="price"${st.sort==="price"?" selected":""}>По цене</option>
+    <option value="price_desc"${st.sort==="price_desc"?" selected":""}>По цене ↓</option>
+    <option value="rarity"${st.sort==="rarity"?" selected":""}>По редкости</option>
+    <option value="lots"${st.sort==="lots"?" selected":""}>По лотам</option>
+  </select>`;
+  html+=`<button type="button" class="btn" id="catFilterReset" style="padding:5px 10px;font-size:11px">Сброс</button>`;
+  box.innerHTML=html;
+  box.style.display="flex";
+
+  const apply=()=>{
+    const st2=getCatState(cat);
+    st2.q=($("catItemQ")?.value||"").trim();
+    st2.rarity=$("catRarity")?.value||"";
+    st2.ptn=$("catPtn")?.value||"";
+    st2.sort=$("catSort")?.value||"name";
+    saveCatView();
+    renderCatItems(cat);
+  };
+  box.querySelectorAll("#catSubChips .cat-chip").forEach(el=>{
+    el.onclick=()=>{
+      getCatState(cat).sub=el.dataset.sub||"";
+      saveCatView();
+      renderCatFilters(cat);
+      renderCatItems(cat);
+    };
+  });
+  $("catItemQ")?.addEventListener("input",()=>{ clearTimeout(window._catQT); window._catQT=setTimeout(apply,120); });
+  $("catRarity")?.addEventListener("change",apply);
+  $("catPtn")?.addEventListener("change",apply);
+  $("catSort")?.addEventListener("change",apply);
+  $("catFilterReset")?.addEventListener("click",()=>{
+    catViewState[cat]={sub:"",rarity:"",ptn:"",q:"",sort:"name"};
+    saveCatView();
+    renderCatFilters(cat);
+    renderCatItems(cat);
+  });
+}
+function filterCatItems(cat){
+  const st=getCatState(cat);
+  let list=rows.filter(r=>(r.category||"other").split("/")[0]===cat);
+  if(st.sub) list=list.filter(r=>itemSubCat(r)===st.sub);
+  if(st.rarity) list=list.filter(r=>String(r.rarity||r.color||"").toUpperCase()===st.rarity);
+  if(st.ptn!=="" && st.ptn!=null){
+    const p=Number(st.ptn);
+    list=list.filter(r=>{
+      const v=r.minPtn!=null?Number(r.minPtn):(r.ptn!=null?Number(r.ptn):null);
+      return v!=null && v===p;
+    });
+  }
+  const q=(st.q||"").trim().toLowerCase();
+  if(q) list=list.filter(r=>(r.name||"").toLowerCase().includes(q)||(r.id||"").toLowerCase().includes(q));
+  const rarityOrder={"DEFAULT":0,"RANK_NEWBIE":1,"RANK_STALKER":2,"RANK_VETERAN":3,"RANK_MASTER":4,"RANK_LEGEND":5,"QUEST_ITEM":6};
+  const sort=st.sort||"name";
+  list.sort((a,b)=>{
+    if(sort==="price"){
+      const ap=a.min_price??1e15, bp=b.min_price??1e15;
+      if(ap!==bp) return ap-bp;
+    } else if(sort==="price_desc"){
+      const ap=a.min_price??-1, bp=b.min_price??-1;
+      if(ap!==bp) return bp-ap;
+    } else if(sort==="lots"){
+      if((b.lots||0)!==(a.lots||0)) return (b.lots||0)-(a.lots||0);
+    } else if(sort==="rarity"){
+      const ar=rarityOrder[String(a.rarity||a.color||"").toUpperCase()]??99;
+      const br=rarityOrder[String(b.rarity||b.color||"").toUpperCase()]??99;
+      if(ar!==br) return ar-br;
+      const aq=a.minQlt??99, bq=b.minQlt??99;
+      if(aq!==bq) return aq-bq;
+    }
+    return (a.name||"").localeCompare(b.name||"","ru");
+  });
+  return list;
+}
+function renderCatItems(cat){
+  const items=filterCatItems(cat);
+  $("catItemsGrid").innerHTML=items.map(r=>{
+    const tier=tierBadge(r);
+    const favOn=isFav(r.id);
+    const sub=itemSubCat(r);
+    const subLabel=sub?(CAT_SUB_RU[sub]||CAT_SUB_RU[sub.split("/")[0]]||sub):"";
+    return`<div class="pcard" data-id="${r.id}">
+      <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
+      <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+      <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
+      <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${subLabel?` <span class="sub">${esc(subLabel)}</span>`:""}</div>
+      <div class="pcard-price">${(r.lots||0)>0?fmt(r.min_price):"—"}</div>
+      ${r.lots>0?`<div class="pcard-qty"><b>${fmtN(r.lots)} лот.</b></div>`:""}
+    </div>`;
+  }).join("")||`<div class="empty" style="grid-column:1/-1">Нет предметов по фильтрам</div>`;
+  $("catItemsGrid").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
+  $("catItemsGrid").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
 }
 function openCategory(cat){
   activeCategory=cat;
@@ -1189,22 +1447,8 @@ function openCategory(cat){
   $("mainTabs").style.display="none";
   $("catHead").style.display="flex";
   $("catTitle").textContent=CAT_RU[cat]||cat;
-  const items=rows.filter(r=>(r.category||"other").split("/")[0]===cat)
-    .sort((a,b)=>(a.name||"").localeCompare(b.name||"","ru"));
-  $("catItemsGrid").innerHTML=items.map(r=>{
-    const tier=tierBadge(r);
-    const favOn=isFav(r.id);
-    return`<div class="pcard" data-id="${r.id}">
-      <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
-      <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
-      <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
-      <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}</div>
-      <div class="pcard-price">${(r.lots||0)>0?fmt(r.min_price):"—"}</div>
-      ${r.lots>0?`<div class="pcard-qty"><b>${fmtN(r.lots)} лот.</b></div>`:""}
-    </div>`;
-  }).join("")||`<div class="empty" style="grid-column:1/-1">Пусто</div>`;
-  $("catItemsGrid").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
-  $("catItemsGrid").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
+  renderCatFilters(cat);
+  renderCatItems(cat);
 }
 function renderCatalog(){
   const q=(catFilter||"").trim().toLowerCase();
@@ -1542,6 +1786,86 @@ function bindPodInputs(){
     };
   });
 }
+
+function reorderPodRows(fromId, toId, placeAfter){
+  const from=podRows.findIndex(r=>r.id===fromId);
+  const to=podRows.findIndex(r=>r.id===toId);
+  if(from<0||to<0||from===to) return false;
+  const [item]=podRows.splice(from,1);
+  let insertAt=podRows.findIndex(r=>r.id===toId);
+  if(insertAt<0) return false;
+  if(placeAfter) insertAt+=1;
+  podRows.splice(insertAt,0,item);
+  savePod();
+  return true;
+}
+function bindPodDrag(body){
+  if(!body) return;
+  let dragId=null, activeTr=null, lastTarget=null, lastPlace=null;
+  const clearMarks=()=>{
+    body.querySelectorAll("tr.pod-drop-before,tr.pod-drop-after,tr.pod-dragging").forEach(tr=>{
+      tr.classList.remove("pod-drop-before","pod-drop-after","pod-dragging");
+    });
+  };
+  const onMove=(e)=>{
+    if(!dragId) return;
+    e.preventDefault();
+    const y=e.touches?e.touches[0].clientY:e.clientY;
+    const x=e.touches?e.touches[0].clientX:e.clientX;
+    const el=document.elementFromPoint(x,y);
+    const tr=el&&el.closest?el.closest("#podBody tr[data-pod-id]"):null;
+    clearMarks();
+    if(activeTr) activeTr.classList.add("pod-dragging");
+    if(!tr || tr.dataset.podId===dragId){ lastTarget=null; return; }
+    const rect=tr.getBoundingClientRect();
+    const after=(y-rect.top)>rect.height/2;
+    tr.classList.add(after?"pod-drop-after":"pod-drop-before");
+    lastTarget=tr.dataset.podId;
+    lastPlace=after?"after":"before";
+  };
+  const onEnd=(e)=>{
+    if(!dragId) return;
+    e.preventDefault();
+    const from=dragId, to=lastTarget, place=lastPlace;
+    dragId=null; activeTr=null; lastTarget=null; lastPlace=null;
+    clearMarks();
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onEnd);
+    document.removeEventListener("pointercancel", onEnd);
+    document.removeEventListener("touchmove", onMove, {passive:false});
+    document.removeEventListener("touchend", onEnd);
+    if(to && from!==to){
+      if(reorderPodRows(from, to, place==="after")) renderPod({skipFocus:true});
+    }
+  };
+  body.querySelectorAll(".pod-drag").forEach(handle=>{
+    handle.addEventListener("pointerdown", e=>{
+      if(e.button!=null && e.button!==0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragId=handle.dataset.podDrag;
+      activeTr=handle.closest("tr");
+      clearMarks();
+      if(activeTr) activeTr.classList.add("pod-dragging");
+      try{ handle.setPointerCapture(e.pointerId); }catch{}
+      document.addEventListener("pointermove", onMove, {passive:false});
+      document.addEventListener("pointerup", onEnd);
+      document.addEventListener("pointercancel", onEnd);
+    });
+    // touch fallback
+    handle.addEventListener("touchstart", e=>{
+      if(dragId) return;
+      e.preventDefault();
+      dragId=handle.dataset.podDrag;
+      activeTr=handle.closest("tr");
+      clearMarks();
+      if(activeTr) activeTr.classList.add("pod-dragging");
+      document.addEventListener("touchmove", onMove, {passive:false});
+      document.addEventListener("touchend", onEnd);
+    }, {passive:false});
+  });
+}
+
 function renderPod(opts){
   const body=$("podBody"); if(!body) return;
   if(!podRows.length){
@@ -1565,6 +1889,9 @@ function renderPod(opts){
         outline:${on?"2px solid #fff":"1px solid rgba(255,255,255,.2)"};box-shadow:${on?"0 0 6px rgba(255,255,255,.35)":"none"}"></button>`;
     }).join("");
     return `<tr data-pod-id="${esc(r.id)}">
+      <td class="pod-drag-td" style="vertical-align:middle">
+        <button type="button" class="pod-drag" data-pod-drag="${esc(r.id)}" title="Перетащить" aria-label="Перетащить">☰</button>
+      </td>
       <td style="vertical-align:middle;width:48px">
         <div class="pod-color-wrap" style="position:relative;display:inline-block">
           <button type="button" class="pod-color-btn" data-pod-id="${esc(r.id)}" title="Цвет"
@@ -1584,6 +1911,7 @@ function renderPod(opts){
     </tr>`;
   }).join("");
   bindPodInputs();
+  bindPodDrag(body);
   body.querySelectorAll(".pod-line-sum").forEach(cell=>{
     cell.onclick=()=>{ const n=Number(cell.dataset.raw); if(Number.isFinite(n)) copyPlainNumber(n, cell); };
   });
@@ -1690,7 +2018,7 @@ function renderDeals(){
     const when=d.ts?new Date(d.ts).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
     return `<div class="calc-item-info" style="margin-bottom:8px">
       <div class="title" style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-        <span>${esc(d.name||d.itemId||"?")}</span>
+        <span>${esc(d.name||d.itemId||"?")}${d.custom?` <span class="badge m">свой</span>`:""}</span>
         <button type="button" class="rm deal-rm" data-id="${esc(d.id)}" title="Удалить">×</button>
       </div>
       <div class="info-row"><span>Купил</span><b>${fmt(d.buy)}</b></div>
@@ -1713,7 +2041,7 @@ function addDealFromForm(){
   const buy=($("dealBuy")?.value||"").trim();
   const sell=($("dealSell")?.value||"").trim();
   const b=calcNum(buy), s=calcNum(sell);
-  if(!itemId && name==="Предмет не выбран"){ alert("Выбери предмет из поиска"); return; }
+  if(!itemId && name==="Предмет не выбран"){ alert("Выбери предмет из поиска или добавь свой"); return; }
   if(!Number.isFinite(b)||b<0){ alert("Укажи сумму покупки"); return; }
   if(!Number.isFinite(s)||s<0){ alert("Укажи цену продажи на аукционе"); return; }
   dealsList.unshift({
@@ -1722,12 +2050,63 @@ function addDealFromForm(){
     name: (name && name!=="Предмет не выбран")?name:(itemId||"Без названия"),
     buy: String(Math.round(b)),
     sell: String(Math.round(s)),
+    custom: !!(itemId && String(itemId).startsWith("custom_")),
     ts: new Date().toISOString()
   });
   saveDeals();
   if($("dealBuy")) $("dealBuy").value="";
   if($("dealSell")) $("dealSell").value="";
   updateDealPreview();
+  renderDeals();
+}
+function updateDealCustomPreview(){
+  const buy=calcNum($("dealCustomBuy")?.value), sell=calcNum($("dealCustomSell")?.value);
+  const netEl=$("dealCustomNet"), profitEl=$("dealCustomProfit");
+  if(!netEl||!profitEl) return;
+  if(Number.isFinite(sell)&&sell>=0){
+    netEl.textContent=fmt(Math.round(sell*0.95));
+    netEl.style.color="var(--text)";
+  }else{ netEl.textContent="—"; netEl.style.color="var(--muted)"; }
+  if(Number.isFinite(buy)&&Number.isFinite(sell)){
+    const p=dealProfit(buy, sell);
+    profitEl.textContent=(p>0?"+":"")+fmt(p);
+    profitEl.style.color=p>0?"var(--green)":p<0?"var(--red)":"var(--muted)";
+  }else{ profitEl.textContent="—"; profitEl.style.color="var(--muted)"; }
+}
+function setDealCustomOpen(open){
+  const box=$("dealCustomBox");
+  if(!box) return;
+  box.style.display=open?"block":"none";
+  if(open) $("dealCustomName")?.focus();
+}
+function addCustomDealFromForm(){
+  const name=($("dealCustomName")?.value||"").trim();
+  const qtyRaw=($("dealCustomQty")?.value||"").trim();
+  const buy=($("dealCustomBuy")?.value||"").trim();
+  const sell=($("dealCustomSell")?.value||"").trim();
+  const b=calcNum(buy), s=calcNum(sell), q=calcNum(qtyRaw);
+  if(!name){ alert("Укажи название предмета"); return; }
+  if(!Number.isFinite(b)||b<0){ alert("Укажи сумму покупки"); return; }
+  if(!Number.isFinite(s)||s<0){ alert("Укажи цену продажи"); return; }
+  const qty=(Number.isFinite(q)&&q>0)?Math.round(q):1;
+  const customId="custom_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  dealsList.unshift({
+    id:"d"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+    itemId: customId,
+    name: name+(qty!==1?" ×"+qty:""),
+    qty: String(qty),
+    buy: String(Math.round(b)),
+    sell: String(Math.round(s)),
+    custom: true,
+    ts: new Date().toISOString()
+  });
+  saveDeals();
+  if($("dealCustomName")) $("dealCustomName").value="";
+  if($("dealCustomQty")) $("dealCustomQty").value="1";
+  if($("dealCustomBuy")) $("dealCustomBuy").value="";
+  if($("dealCustomSell")) $("dealCustomSell").value="";
+  updateDealCustomPreview();
+  setDealCustomOpen(false);
   renderDeals();
 }
 function updateDealSuggest(){
@@ -2317,6 +2696,11 @@ $("dealQ")?.addEventListener("input", updateDealSuggest);
 $("dealBuy")?.addEventListener("input", updateDealPreview);
 $("dealSell")?.addEventListener("input", updateDealPreview);
 $("dealAddBtn")?.addEventListener("click", addDealFromForm);
+$("dealCustomToggle")?.addEventListener("click",()=>setDealCustomOpen($("dealCustomBox")?.style.display==="none"||!$("dealCustomBox")?.style.display));
+$("dealCustomCancel")?.addEventListener("click",()=>setDealCustomOpen(false));
+$("dealCustomAddBtn")?.addEventListener("click", addCustomDealFromForm);
+$("dealCustomBuy")?.addEventListener("input", updateDealCustomPreview);
+$("dealCustomSell")?.addEventListener("input", updateDealCustomPreview);
 $("dealFilterAll")?.addEventListener("click",()=>{ dealFilter="all"; renderDeals(); });
 $("dealFilterToday")?.addEventListener("click",()=>{ dealFilter="today"; renderDeals(); });
 $("dealFilterPlus")?.addEventListener("click",()=>{ dealFilter="plus"; renderDeals(); });
