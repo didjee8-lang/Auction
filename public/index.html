@@ -847,7 +847,9 @@ async function copyItemName(id){
 function toggleFav(id){
   if(isFav(id))favIds=favIds.filter(x=>x!==id);
   else favIds.push(id);
-  saveFavs();renderFavs();renderCards();
+  saveFavs();renderFavs();
+  // Сразу убрать/вернуть карточку в сетке аукциона
+  renderCards({forceFull:true, noAnim:true});
   if(activeCategory)openCategory(activeCategory);
   const btn=$("drawerFavBtn");if(btn)btn.classList.toggle("on",isFav(id));
 }
@@ -1315,8 +1317,9 @@ function getAuctionList(){
     return {mode:"excl", list};
   }
   const HARD_PRIORITY=new Set(["8AjTFOVB","cpe1d8xz","kJD59qaP","rdt1m5ve","55VrA59M","WdVYNOia","nb0OaSNs","rA8fsgH1","skuTyVhI","vKJbSN93","vpxznHgV"]);
-  const isPrio=r=>!!(r.priority || HARD_PRIORITY.has(r.id) || HARD_PRIORITY.has(String(r.id||"").replace(/@q\d+$/,"")) || isFav(r.id));
-  let list=rows.filter(r=>((r.lots||0)>0 || isPrio(r)) && !isExcl(r.id));
+  // Избранное только в верхней строке — в сетке аукциона не показываем
+  const isPrio=r=>!!(r.priority || HARD_PRIORITY.has(r.id) || HARD_PRIORITY.has(String(r.id||"").replace(/@q\d+$/,"")));
+  let list=rows.filter(r=>((r.lots||0)>0 || isPrio(r)) && !isExcl(r.id) && !isFav(r.id));
   if(selectedCats.length) list=list.filter(r=>isPrio(r) || selectedCats.includes(itemCat(r)));
   if(filter==="cheap") list=list.filter(r=>r.status==="cheap"||isPrio(r));
   else if(filter==="expensive") list=list.filter(r=>r.status==="expensive"||isPrio(r));
