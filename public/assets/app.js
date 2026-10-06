@@ -1,0 +1,2358 @@
+import { connectSSE } from "./sse.js";
+const $=id=>document.getElementById(id);
+let rows=[],filter="all",sortBy="new",activeId=null,catFilter="",rightTab="catalog";
+let activeCategory=null;
+let catViewState=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_cat_view")||"{}"); }catch{ return {}; } })();
+if(!catViewState || typeof catViewState!=="object") catViewState={};
+function saveCatView(){ try{ localStorage.setItem("sz_cat_view", JSON.stringify(catViewState)); }catch{} }
+function getCatState(cat){
+  if(!catViewState[cat]) catViewState[cat]={sub:"", rarity:"", ptn:"", q:"", sort:"name"};
+  return catViewState[cat];
+}
+
+let calcIds=JSON.parse(localStorage.getItem("sz_calc")||"[]");
+let calcMode=(()=>{ const m=localStorage.getItem("sz_calc_mode")||"buy"; return m==="pod"?"buy":m; })();
+let calcBuyPrices=JSON.parse(localStorage.getItem("sz_calc_buy_prices")||"{}");
+let calcBuyQty=JSON.parse(localStorage.getItem("sz_calc_buy_qty")||"{}");
+let calcSellPrices=JSON.parse(localStorage.getItem("sz_calc_sell_prices")||"{}");
+let calcSellQty=JSON.parse(localStorage.getItem("sz_calc_sell_qty")||"{}");
+let calcTotalSellPrices=JSON.parse(localStorage.getItem("sz_calc_total_sell_prices")||"{}");
+let calcTotalSellQty=JSON.parse(localStorage.getItem("sz_calc_total_sell_qty")||"{}");
+// Подсчёт: свободный список {id,name,color,price,qty}
+let podRows=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_pod_rows")||"[]"); }catch{ return []; } })();
+if(!Array.isArray(podRows)) podRows=[];
+// Палитра без названий (hex)
+const POD_COLORS=[
+  "#f2f2f2","#d1d5db","#9ca3af","#6b7280","#374151",
+  "#fef08a","#fbbf24","#f59e0b","#ea580c","#c2410c",
+  "#86efac","#4ade80","#22c55e","#16a34a","#166534",
+  "#7dd3fc","#60a5fa","#3b82f6","#2563eb","#1d4ed8",
+  "#c4b5fd","#a78bfa","#c084fc","#a855f7","#7c3aed",
+  "#f9a8d4","#f472b6","#ec4899","#db2777","#9d174d",
+  "#fca5a5","#f87171","#ef4444","#ff2a2a","#b91c1c",
+  "#5eead4","#2dd4bf","#14b8a6","#0d9488","#0f766e",
+];
+const POD_COLOR_LEGACY={
+  white:"#f2f2f2",grey:"#9ca3af",green:"#4ade80",blue:"#60a5fa",
+  purple:"#c084fc",red:"#f87171",yellow:"#fbbf24",unique:"#ff2a2a"
+};
+function podColorHex(c){
+  if(!c) return POD_COLORS[0];
+  if(String(c).startsWith("#")) return c;
+  return POD_COLOR_LEGACY[c]||POD_COLORS[0];
+}
+function savePod(){ try{ localStorage.setItem("sz_pod_rows", JSON.stringify(podRows)); }catch{} }
+function podNewId(){ return "p"+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+let podHist=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_pod_hist")||"[]"); }catch{ return []; } })();
+if(!Array.isArray(podHist)) podHist=[];
+function savePodHist(){ try{ localStorage.setItem("sz_pod_hist", JSON.stringify(podHist)); }catch{} }
+function snapshotPodForHistory(){
+  const lines=[];
+  let total=0;
+  for(const r of podRows){
+    const p=calcNum(r.price), q=calcNum(r.qty);
+    if(!Number.isFinite(p)||p<0||!Number.isFinite(q)||q<=0) continue;
+    const sum=Math.round(p*q);
+    total+=sum;
+    lines.push({
+      name: String(r.name||"Без названия"),
+      color: podColorHex(r.color),
+      price: String(Math.round(p)),
+      qty: String(Math.round(q)),
+      sum: String(sum)
+    });
+  }
+  if(!lines.length) return null;
+  return {
+    id: "h"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+    ts: new Date().toISOString(),
+    total: String(Math.round(total)),
+    lines
+  };
+}
+function savePodHistoryFromSum(){
+  const snap=snapshotPodForHistory();
+  if(!snap) return false;
+  // не дублировать подряд одинаковый снимок (тот же total + те же строки)
+  const prev=podHist[0];
+  if(prev && prev.total===snap.total && JSON.stringify(prev.lines)===JSON.stringify(snap.lines)){
+    return true; // уже есть
+  }
+  podHist.unshift(snap);
+  if(podHist.length>100) podHist=podHist.slice(0,100);
+  savePodHist();
+  if($("podHistPanel")?.style.display!=="none") renderPodHist();
+  return true;
+}
+function renderPodHist(){
+  const box=$("podHistList"); if(!box) return;
+  if(!podHist.length){
+    box.innerHTML=`<div class="empty">Пока пусто — кликни по общей сумме</div>`;
+    return;
+  }
+  box.innerHTML=podHist.map(h=>{
+    const when=h.ts?new Date(h.ts).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+    const rows=(h.lines||[]).map(l=>`
+      <div class="info-row">
+        <span style="color:${esc(l.color||"#f2f2f2")};font-weight:600">${esc(l.name)}</span>
+        <b>${esc(l.qty)} × ${fmt(l.price)} = <span style="color:var(--neon2)">${fmt(l.sum)}</span></b>
+      </div>`).join("");
+    return `<div class="calc-item-info" style="margin-bottom:8px">
+      <div class="title" style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+        <span>${when}</span>
+        <span style="display:flex;gap:8px;align-items:center">
+          <b class="pod-copy pod-hist-total" data-raw="${esc(h.total)}" title="Копировать сумму" style="color:var(--neon2);cursor:pointer">${fmt(h.total)}</b>
+          <button type="button" class="rm pod-hist-rm" data-id="${esc(h.id)}">×</button>
+        </span>
+      </div>
+      ${rows}
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".pod-hist-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      podHist=podHist.filter(x=>x.id!==btn.dataset.id);
+      savePodHist(); renderPodHist();
+    };
+  });
+  box.querySelectorAll(".pod-hist-total").forEach(el=>{
+    el.onclick=()=>{
+      const n=Number(el.dataset.raw);
+      if(Number.isFinite(n)) copyPlainNumber(n, el);
+    };
+  });
+}
+let favIds=JSON.parse(localStorage.getItem("sz_favs")||"[]");
+let excludeIds=JSON.parse(localStorage.getItem("sz_excl")||"[]");
+let selectedCats=JSON.parse(localStorage.getItem("sz_cats")||"[]");
+let templates=JSON.parse(localStorage.getItem("sz_tpls")||"[]");
+let activeTpl=localStorage.getItem("sz_tpl_active")||"";
+let catIcons={};
+let itemRefreshTimer=null;
+function saveFavs(){localStorage.setItem("sz_favs",JSON.stringify(favIds))}
+function saveExcl(){localStorage.setItem("sz_excl",JSON.stringify(excludeIds))}
+function saveCats(){localStorage.setItem("sz_cats",JSON.stringify(selectedCats))}
+function saveTpls(){localStorage.setItem("sz_tpls",JSON.stringify(templates));localStorage.setItem("sz_tpl_active",activeTpl)}
+function isFav(id){return favIds.includes(id)}
+function isExcl(id){return excludeIds.includes(id)}
+async function copyItemName(id){
+  const row=rows.find(r=>r.id===id);
+  const name=String(row?.name||id||"").trim();
+  if(!name)return;
+  try{
+    if(navigator.clipboard&&window.isSecureContext){
+      await navigator.clipboard.writeText(name);
+    }else{
+      const ta=document.createElement("textarea");
+      ta.value=name;
+      ta.style.position="fixed";ta.style.left="-9999px";
+      document.body.appendChild(ta);ta.focus();ta.select();
+      document.execCommand("copy");ta.remove();
+    }
+    let toast=document.getElementById("copyToast");
+    if(!toast){
+      toast=document.createElement("div");
+      toast.id="copyToast";
+      toast.style.cssText="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:9999;background:rgba(20,20,20,.96);color:#fff;border:1px solid rgba(255,42,42,.45);border-radius:8px;padding:7px 12px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.45);pointer-events:none;opacity:0;transition:opacity .15s";
+      document.body.appendChild(toast);
+    }
+    toast.textContent="Скопировано: "+name;
+    toast.style.opacity="1";
+    clearTimeout(window._copyToastTimer);
+    window._copyToastTimer=setTimeout(()=>{toast.style.opacity="0"},1200);
+  }catch{}
+}
+function toggleFav(id){
+  if(isFav(id))favIds=favIds.filter(x=>x!==id);
+  else favIds.push(id);
+  saveFavs();renderFavs();
+  // Сразу убрать/вернуть карточку в сетке аукциона
+  renderCards({forceFull:true, noAnim:true});
+  if(activeCategory)openCategory(activeCategory);
+  const btn=$("drawerFavBtn");if(btn)btn.classList.toggle("on",isFav(id));
+}
+function addExclude(id){
+  if(!isExcl(id))excludeIds.push(id);
+  // also remove from favs if present
+  if(isFav(id)){favIds=favIds.filter(x=>x!==id);saveFavs();renderFavs()}
+  saveExcl();renderCards();
+}
+function removeExclude(id){
+  excludeIds=excludeIds.filter(x=>x!==id);saveExcl();renderCards();
+}
+function itemCat(r){return (r.category||"other").split("/")[0]||"other"}
+function getAllCats(){
+  const set=new Set();
+  for(const r of rows)set.add(itemCat(r));
+  return [...set].sort((a,b)=>(CAT_RU[a]||a).localeCompare(CAT_RU[b]||b,"ru"));
+}
+function renderCatChips(){
+  const box=$("catChips");if(!box)return;
+  const cats=getAllCats();
+  box.innerHTML=cats.map(c=>{
+    const on=selectedCats.includes(c);
+    return `<div class="cat-chip${on?" on":""}" data-cat="${esc(c)}">${esc(CAT_RU[c]||c)}</div>`;
+  }).join("");
+  box.querySelectorAll(".cat-chip").forEach(el=>{
+    el.onclick=()=>{
+      const c=el.dataset.cat;
+      if(selectedCats.includes(c))selectedCats=selectedCats.filter(x=>x!==c);
+      else selectedCats.push(c);
+      saveCats();
+      // deselect template if manual edit
+      if(activeTpl){activeTpl="";saveTpls();renderTplBar()}
+      el.classList.toggle("on");
+      renderCards();
+    };
+  });
+}
+function renderTplBar(){
+  const bar=$("tplBar");if(!bar)return;
+  const addBtn=bar.querySelector("#tplAdd");
+  bar.querySelectorAll(".tpl-chip:not(.add)").forEach(x=>x.remove());
+  const all=document.createElement("div");
+  all.className="tpl-chip"+(activeTpl===""?" on":"");
+  all.dataset.tpl="";
+  all.textContent="Все";
+  all.onclick=()=>{activeTpl="";selectedCats=[];saveCats();saveTpls();renderTplBar();renderCatChips();renderCards()};
+  bar.insertBefore(all,addBtn);
+  templates.forEach((t,idx)=>{
+    const el=document.createElement("div");
+    el.className="tpl-chip"+(activeTpl===String(idx)?" on":"");
+    el.dataset.tpl=String(idx);
+    el.innerHTML=`${esc(t.name||("Шаблон "+(idx+1)))}<span class="x" data-del="${idx}" title="Удалить">×</span>`;
+    el.onclick=e=>{
+      if(e.target.closest("[data-del]")){
+        e.stopPropagation();
+        templates.splice(idx,1);
+        if(activeTpl===String(idx))activeTpl="";
+        else if(Number(activeTpl)>idx)activeTpl=String(Number(activeTpl)-1);
+        saveTpls();renderTplBar();return;
+      }
+      activeTpl=String(idx);
+      selectedCats=[...(t.cats||[])];
+      if(t.excludes)excludeIds=[...new Set([...excludeIds,...t.excludes])];
+      saveCats();saveExcl();saveTpls();
+      renderTplBar();renderCatChips();renderCards();
+    };
+    bar.insertBefore(el,addBtn);
+  });
+  if(addBtn)addBtn.onclick=()=>{
+    const name=prompt("Название шаблона","Шаблон "+(templates.length+1));
+    if(!name)return;
+    templates.push({name,cats:[...selectedCats],excludes:[...excludeIds]});
+    activeTpl=String(templates.length-1);
+    saveTpls();renderTplBar();
+  };
+}
+let favLiveBusy=false;
+let favLiveRefreshAt=0;
+async function refreshFavoriteLots(force=false){
+  if(favLiveBusy||!favIds.length)return;
+  const now=Date.now();
+  if(!force && now-favLiveRefreshAt<1400)return;
+  favLiveBusy=true; favLiveRefreshAt=now;
+  try{
+    const ids=favIds.map(encodeURIComponent).join(",");
+    const j=await (await fetch("/api/favorites/live?ids="+ids,{cache:"no-store"})).json();
+    for(const x of (j.rows||[])){
+      const r=rows.find(row=>row.id===x.id); if(!r)continue;
+      r.lots=Number(x.lotsCount||0);
+      r.min_price=x.minPrice??null;
+      r.minUnitPrice=x.minUnitPrice??x.minPrice??null;
+      r.minAmount=x.minAmount??null;
+      r.minTotalPrice=x.minTotalPrice??null;
+      r.max_price=x.maxPrice??null;
+      r.avg_price=x.avgPrice??null;
+      r.totalAmount=x.totalAmount??null;
+      r.lastSale=x.lastSale??r.lastSale??null;
+      // НЕ трогаем r.ts — иначе избранное при каждом live-обновлении
+      // получает «свежее» время и уезжает наверх ленты аукциона
+    }
+    const favScrollState=saveScrollState();
+    renderFavs();
+    requestAnimationFrame(()=>restoreScrollState(favScrollState));
+  }catch{}
+  finally{favLiveBusy=false}
+}
+
+function renderFavs(){
+  const box=$("dashboard");
+  if(!favIds.length){box.innerHTML=`<div class="fav-empty">Избранное пусто — нажми ★ на карточке лота</div>`;return}
+  box.innerHTML=favIds.map(id=>{
+    const r=rows.find(x=>x.id===id)||{id,name:id};
+    const tier=tierBadge(r);
+    const listed=(r.lots||0)>0;
+    const cls=["fav-card",id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
+    const unit=listed?(r.minUnitPrice!=null?r.minUnitPrice:r.min_price):null;
+    const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
+    const price=listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"нет данных");
+    const lotsTxt=listed?`${fmtN(r.lots)} лот.`:(fallbackSale!=null?"нет активных лотов · последняя продажа":"нет активных лотов");
+    const qltCol=r.qltColor||null;
+    const qltTxt=r.qltShort||r.qltLabel||"";
+    const nameCol=qltCol||(tier?tier.color:"var(--text)");
+    return`<div class="${cls}" data-id="${esc(id)}" style="${qltCol?`border-color:${qltCol}55`:""}">
+      <button class="fav-star" data-fav-rm="${esc(id)}" title="Убрать из избранного">★</button>
+      <div class="fav-top">
+        <div class="fav-icon">${iconHtml(id,r.name)}</div>
+        <div class="fav-name" style="color:${nameCol}">${esc(r.name||id)}</div>
+      </div>
+      ${qltTxt?`<div class="fav-qlt" style="color:${qltCol||"var(--muted)"}">${esc(qltTxt)}</div>`:""}
+      <div class="fav-price" style="color:${listed?"var(--neon2)":"var(--muted)"}">${price}${listed?' <span style="font-size:9px;color:var(--muted)">/шт</span>':''}</div>
+      <div class="fav-meta"><span style="color:${listed?"var(--green)":"var(--red)"}">${lotsTxt}</span>${r.profit!=null&&listed?`<span style="color:${r.profit>=0?"var(--green)":"var(--red)"}">${r.profit>=0?"+":""}${fmt(r.profit)}</span>`:""}</div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".fav-card").forEach(el=>{
+    el.onclick=e=>{if(e.target.closest("[data-fav-rm]"))return;openItem(el.dataset.id)};
+    let tipTimer=null, tipEl=null;
+    el.onmouseenter=()=>{
+      tipTimer=setTimeout(()=>{
+        const id=el.dataset.id;
+        const r=rows.find(x=>x.id===id);
+        if(!r)return;
+        const listed=(r.lots||0)>0;
+        const unit=listed?(r.minUnitPrice??r.min_price):null;
+        const fallbackSale=r.lastSale!=null?Number(r.lastSale):null;
+        const deal=r.status==="cheap";
+        document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
+        tipEl=document.createElement("div");
+        tipEl.className="fav-tip show";
+        tipEl.innerHTML=`<div class="ft-title">${esc(r.name||id)}</div>
+          <div class="ft-row"><span>Статус</span><b class="${listed?"ft-deal":""}">${listed?"в продаже":"не выставлен"}</b></div>
+          <div class="ft-row"><span>Цена / шт.</span><b>${listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"—")}</b></div>
+          <div class="ft-row"><span>Лотов</span><b>${listed?fmtN(r.lots):(fallbackSale!=null?"0 · последняя продажа":"0")}</b></div>
+          <div class="ft-row"><span>Выгода</span><b class="${deal?"ft-deal":""}">${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</b></div>
+          ${deal?`<div class="ft-row ft-deal">Выгоднее рынка</div>`:""}`;
+        document.body.appendChild(tipEl);
+        const rect=el.getBoundingClientRect();
+        let left=rect.left;
+        let top=rect.bottom+6;
+        const tw=tipEl.offsetWidth, th=tipEl.offsetHeight;
+        if(left+tw>window.innerWidth-8)left=window.innerWidth-tw-8;
+        if(left<8)left=8;
+        if(top+th>window.innerHeight-8)top=rect.top-th-6;
+        if(top<8)top=8;
+        tipEl.style.left=left+"px";
+        tipEl.style.top=top+"px";
+      },600);
+    };
+    el.onmouseleave=()=>{
+      if(tipTimer){clearTimeout(tipTimer);tipTimer=null}
+      if(tipEl){tipEl.remove();tipEl=null}
+      document.querySelectorAll(".fav-tip").forEach(t=>t.remove());
+    };
+  });
+  box.querySelectorAll("[data-fav-rm]").forEach(btn=>{
+    btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.favRm)};
+  });
+}
+function renderHunt(){
+  const q=($("huntQ").value||"").trim().toLowerCase();
+  const priceRaw=($("huntPrice").value||"").replace(/\s+/g,"").replace(",",".");
+  const target=priceRaw===""?NaN:Number(priceRaw);
+  const box=$("huntResults");
+  if(!q){box.innerHTML=`<span class="hunt-empty">Введи предмет и желаемую цену за шт.</span>`;return}
+  let list=fuzzyFilter(rows.filter(r=>(r.lots||0)>0),q);
+  if(!list.length){box.innerHTML=`<span class="hunt-empty">Нет лотов по запросу</span>`;return}
+  // sort by nearest to target if set, else by cheapest
+  if(Number.isFinite(target)){
+    list.sort((a,b)=>{
+      const pa=a.minUnitPrice??a.min_price??1e18,pb=b.minUnitPrice??b.min_price??1e18;
+      const da=Math.abs(pa-target),db=Math.abs(pb-target);
+      // prefer <= target, then by distance
+      const sa=pa<=target?0:1,sb=pb<=target?0:1;
+      if(sa!==sb)return sa-sb;
+      return da-db||pa-pb;
+    });
+  }else{
+    list.sort((a,b)=>(a.minUnitPrice??a.min_price??1e18)-(b.minUnitPrice??b.min_price??1e18));
+  }
+  const cards=list.slice(0,8).map(r=>{
+    const unit=r.minUnitPrice??r.min_price;
+    let cls="hunt-card", tag="";
+    if(Number.isFinite(target)&&unit!=null){
+      const diff=unit-target;
+      const pct=target>0?Math.abs(diff)/target:0;
+      if(unit<=target){cls+=" deal";tag=diff===0?" = твоя цена":" ниже ~"+fmt(Math.abs(diff));}
+      else if(pct<=0.15){cls+=" near";tag=" ≈ ближайшая +"+fmt(diff);}
+      else{cls+=" near";tag=" ближайшая +"+fmt(diff);}
+    }else if(r.status==="cheap"){cls+=" deal";tag=" ниже рынка";}
+    return`<div class="${cls}" data-id="${esc(r.id)}">
+      <div class="hn">${esc(r.name||r.id)}</div>
+      <div class="hp">${fmt(unit)} / шт.${tag?` <span class="sub">${tag}</span>`:""}</div>
+      <div class="hm">${fmtN(r.lots)} лот. · ${r.profit!=null?(r.profit>=0?"+":"")+fmt(r.profit):"—"}</div>
+    </div>`;
+  }).join("");
+  box.innerHTML=cards;
+  box.querySelectorAll(".hunt-card").forEach(el=>el.onclick=()=>openItem(el.dataset.id));
+}
+const QLT_RU={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
+const CAT_RU={armor:"Броня",armour:"Броня",armor_style:"Стили брони",artefact:"Артефакты",attachment:"Обвесы",backpacks:"Рюкзаки",consumables:"Расходники",containers:"Контейнеры",device:"Устройства",misc:"Разное",other:"Прочее",weapon:"Оружие",weapon_modules:"Модули оружия",weapon_style:"Стили оружия"};
+const CAT_SUB_RU={
+  // artefact types
+  biochemical:"Биохимические",electrophysical:"Электрофизические",gravity:"Гравитационные",
+  thermal:"Термальные",other_arts:"Прочие артефакты",
+  // attachment / modules
+  barrel:"Стволы",collimator_sights:"Коллиматоры",mag:"Магазины",handgrips:"Рукояти",
+  forend:"Цевья",accessory:"Аксессуары",pistol_handle:"Пист. рукояти",other:"Прочее",
+  core:"Ядра",module:"Модули",remover:"Съёмники",
+  // consumables
+  bullet:"Патроны",food:"Еда",medicine:"Медикаменты",grenade:"Гранаты",plates:"Пластины",drink:"Напитки",
+  // armor
+  clothes:"Одежда",combat:"Боевая",combined:"Комбинированная",scientist:"Научная",
+  // other
+  skins:"Скины",barter:"Бартер",hideout:"Убежище",trash:"Хлам",structures:"Постройки",
+  useful:"Полезное",boxes:"Ящики",misc:"Разное",
+  // weapon
+  assault_rifle:"Штурмовые",
+  styles:"Стили"
+};
+const RARITY_RU={
+  DEFAULT:"Обычный",RANK_NEWBIE:"Новичок",RANK_STALKER:"Сталкер",RANK_VETERAN:"Ветеран",
+  RANK_MASTER:"Мастер",RANK_LEGEND:"Легенда",QUEST_ITEM:"Квестовый","":"—"
+};
+
+function fmt(n){if(n==null||!isFinite(n))return"—";const x=Number(n);if(Number.isInteger(x))return x.toLocaleString("ru-RU")+" ₽";return x.toLocaleString("ru-RU",{maximumFractionDigits:2})+" ₽"}
+function fmtN(n){return(n==null||!isFinite(n))?"—":Number(n).toLocaleString("ru-RU")}
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;")}
+function norm(s){return String(s||"").toLowerCase().replace(/ё/g,"е").replace(/[^a-zа-я0-9]+/gi," ").replace(/\s+/g," ").trim()}
+function lev(a,b){
+  if(a===b)return 0;if(!a.length)return b.length;if(!b.length)return a.length;
+  if(a.length>b.length){const t=a;a=b;b=t}
+  const row=new Array(a.length+1);
+  for(let i=0;i<=a.length;i++)row[i]=i;
+  for(let j=1;j<=b.length;j++){
+    let prev=j-1,cur=j;
+    for(let i=1;i<=a.length;i++){
+      const next=row[i];
+      const cost=a[i-1]===b[j-1]?0:1;
+      cur=Math.min(row[i]+1,cur+1,prev+cost);
+      row[i-1]=prev;prev=next;
+    }
+    row[a.length]=cur;
+  }
+  return row[a.length];
+}
+// fuzzy score: higher = better match. 0 = no match
+function fuzzyScore(query,name,id){
+  const q=norm(query); if(!q)return 1;
+  const n=norm(name), i=norm(id); if(!n&&!i)return 0;
+  if(n===q||i===q)return 100;
+  if(n.includes(q)||i.includes(q))return 90;
+  const qTokens=q.split(" ").filter(Boolean), nTokens=n.split(" ").filter(Boolean);
+  let matched=0,score=0;
+  for(const qt of qTokens){
+    let best=0;
+    for(const nt of nTokens){
+      if(nt===qt){best=Math.max(best,70);continue}
+      if(nt.startsWith(qt)||qt.startsWith(nt)){
+        const ratio=Math.min(qt.length,nt.length)/Math.max(qt.length,nt.length);
+        if(ratio>=0.75)best=Math.max(best,45);
+        continue;
+      }
+      const d=lev(qt,nt), maxL=Math.max(qt.length,nt.length)||1;
+      if(qt.length>=4&&d<=1)best=Math.max(best,32);
+      else if(qt.length>=6&&d<=2&&d/maxL<=0.30)best=Math.max(best,24);
+    }
+    if(best){matched++;score+=best}
+  }
+  return qTokens.length&&matched===qTokens.length ? score+matched*8 : 0;
+}
+function fuzzyFilter(list,query,limit){
+  const q=(query||"").trim();
+  if(!q)return list.slice(0,limit||list.length);
+  const scored=[];
+  for(const r of list){
+    const s=fuzzyScore(q,r.name,r.id);
+    if(s>0)scored.push({r,s});
+  }
+  scored.sort((a,b)=>b.s-a.s);
+  const out=scored.map(x=>x.r);
+  return limit?out.slice(0,limit):out;
+}
+function qltBadge(qlt,ptn){
+  if(qlt==null&&ptn==null)return null;
+  const labels={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
+  const classes={0:"tier-grey",1:"tier-green",2:"tier-blue",3:"tier-pink",4:"tier-red",5:"tier-yellow",6:"tier-purple"};
+  const colors={0:"#9ca3af",1:"#4ade80",2:"#60a5fa",3:"#f472b6",4:"#f87171",5:"#fbbf24",6:"#ff2a2a"};
+  let label=qlt!=null?(labels[qlt]||("qlt "+qlt)):"";
+  if(ptn!=null&&ptn>0)label+=(label?" ":"")+"+"+ptn;
+  if(!label)return null;
+  return{label,cls:classes[qlt]||"tier-grey",color:colors[qlt]||"#9ca3af"};
+}
+function tierBadge(row){
+  // Prefer live lot quality for artefacts
+  if(row.minQlt!=null||row.qlt!=null){
+    const b=qltBadge(row.minQlt??row.qlt, row.minPtn??row.ptn);
+    if(b)return b;
+  }
+  const col=String(row.rarity||row.color||"").toUpperCase();
+  const cat=String(row.category||"").toLowerCase();
+  const isArt=cat.startsWith("artefact");
+  const isGear=cat.startsWith("weapon")||cat.startsWith("armor")||cat.startsWith("device")||cat.startsWith("containers")||cat.startsWith("backpack");
+  if(col.includes("NEWBIE"))return{label:isArt?"Необычное":"Новичок",cls:"tier-green",color:"#4ade80"};
+  if(col.includes("STALKER"))return{label:isArt?"Особое":"Сталкер",cls:"tier-blue",color:"#60a5fa"};
+  if(col.includes("VETERAN"))return{label:isArt?"Редкое":"Ветеран",cls:"tier-pink",color:"#f472b6"};
+  if(col.includes("MASTER"))return{label:isArt?"Исключительное":"Мастер",cls:"tier-red",color:"#f87171"};
+  if(col.includes("LEGEND"))return{label:isArt?"Легендарная":"Легенда",cls:"tier-yellow",color:"#fbbf24"};
+  if(col.includes("EXCLUSIVE"))return{label:"Уникальное",cls:"tier-purple",color:"#ff2a2a"};
+  if(col==="DEFAULT"||!col){
+    if(isGear)return{label:"Отмычка",cls:"tier-grey",color:"#9ca3af"};
+    return{label:"Обычное",cls:"tier-grey",color:"#9ca3af"};
+  }
+  return null;
+}
+function statusBadge(row){
+  if(row.status==="cheap")return`<span class="badge g">Ниже рынка</span>`;
+  if(row.status==="expensive")return`<span class="badge r">Выше рынка</span>`;
+  if(row.status==="normal")return`<span class="badge y">Обычная</span>`;
+  if(row.lots>0)return`<span class="badge p">В продаже</span>`;
+  return`<span class="badge m">Нет лотов</span>`;
+}
+function baseItemId(id){return String(id||"").replace(/@q\d+$/,"")}
+function iconUrl(id){const b=baseItemId(id);return b?`/api/icon/${encodeURIComponent(b)}`:""}
+function iconHtml(id,name){
+  return `<img src="${iconUrl(id)}" alt="" loading="lazy" decoding="async"
+    onerror="this.style.visibility='hidden'"
+    onload="this.style.visibility='visible'">`;
+}
+
+/* --- smooth auction updates (no micro-freeze) --- */
+let _auctionRenderedIds=[];
+let _pendingAuctionList=null;
+let _userBusyUntil=0;
+function markUserBusy(ms){
+  _userBusyUntil=Math.max(_userBusyUntil, Date.now()+(ms||800));
+}
+function isUserBusy(){
+  if(Date.now()<_userBusyUntil) return true;
+  const ae=document.activeElement;
+  if(!ae) return false;
+  const tag=ae.tagName;
+  if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT") return true;
+  if(ae.isContentEditable) return true;
+  return false;
+}
+function cardSig(r){
+  return [r.min_price,r.minUnitPrice,r.lots,r.status,r.profit,r.profitPct,r.lastSale,isFav(r.id)?1:0,r.id===activeId?1:0].join("|");
+}
+function cardHtml(r){
+  const tier=tierBadge(r);
+  const hasLots=(r.lots||0)>0;
+  const cls=["pcard",r.id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
+  const profitLine=r.profit!=null?`<div class="pcard-profit ${r.profit>=0?"pos":"neg"}">${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)</div>`:"";
+  const favOn=isFav(r.id);
+  const priceTxt=hasLots
+    ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
+    : (r.lastSale!=null?`<span style="color:var(--muted)">посл. ${fmt(r.lastSale)}</span>`:"—");
+  return`<div class="${cls}" data-id="${esc(r.id)}" data-sig="${esc(cardSig(r))}">
+    <button class="pcard-excl" data-excl="${esc(r.id)}" title="В исключения">−</button>
+    <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
+    <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+    <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(r.name||r.id)}</div>
+    <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}</div>
+    <div class="pcard-price">${priceTxt}</div>
+    <div class="pcard-qty"><b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b></div>
+    ${profitLine}
+    <div class="pcard-status">${statusBadge(r)}</div>
+  </div>`;
+}
+function bindCardEvents(root){
+  const box=root||$("cards");
+  if(!box) return;
+  box.querySelectorAll(".pcard").forEach(el=>{
+    if(el._bound) return;
+    el._bound=true;
+    el.onclick=e=>{if(e.target.closest("[data-fav],[data-excl]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)};
+  });
+  box.querySelectorAll("[data-fav]").forEach(btn=>{
+    if(btn._bound) return;
+    btn._bound=true;
+    btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)};
+  });
+  box.querySelectorAll("[data-excl]").forEach(btn=>{
+    if(btn._bound) return;
+    btn._bound=true;
+    btn.onclick=e=>{e.stopPropagation();addExclude(btn.dataset.excl)};
+  });
+}
+function patchCardEl(el, r){
+  const sig=cardSig(r);
+  if(el.dataset.sig===sig) return false;
+  el.dataset.sig=sig;
+  el.classList.toggle("active", r.id===activeId);
+  el.classList.toggle("cheap", r.status==="cheap");
+  el.classList.toggle("expensive", r.status==="expensive");
+  const tier=tierBadge(r);
+  const hasLots=(r.lots||0)>0;
+  const nameEl=el.querySelector(".pcard-name");
+  if(nameEl){
+    nameEl.style.color=r.qltColor||(tier?tier.color:"var(--text)");
+    nameEl.textContent=r.name||r.id;
+  }
+  const rar=el.querySelector(".pcard-rarity");
+  if(rar){
+    rar.innerHTML=`${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}`;
+  }
+  const priceEl=el.querySelector(".pcard-price");
+  if(priceEl){
+    priceEl.innerHTML=hasLots
+      ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
+      : (r.lastSale!=null?`<span style="color:var(--muted)">посл. ${fmt(r.lastSale)}</span>`:"—");
+  }
+  const qtyEl=el.querySelector(".pcard-qty");
+  if(qtyEl) qtyEl.innerHTML=`<b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b>`;
+  let profitEl=el.querySelector(".pcard-profit");
+  if(r.profit!=null){
+    const html=`${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)`;
+    if(!profitEl){
+      profitEl=document.createElement("div");
+      profitEl.className="pcard-profit";
+      const st=el.querySelector(".pcard-status");
+      if(st) el.insertBefore(profitEl, st); else el.appendChild(profitEl);
+    }
+    profitEl.className=`pcard-profit ${r.profit>=0?"pos":"neg"}`;
+    profitEl.textContent=html;
+  } else if(profitEl){
+    profitEl.remove();
+  }
+  const stEl=el.querySelector(".pcard-status");
+  if(stEl) stEl.innerHTML=statusBadge(r)||"";
+  const favBtn=el.querySelector("[data-fav]");
+  if(favBtn){
+    const on=isFav(r.id);
+    favBtn.classList.toggle("on", on);
+    favBtn.textContent=on?"★":"☆";
+    favBtn.title=on?"Убрать из избранного":"В избранное";
+  }
+  return true;
+}
+function getAuctionList(){
+  const q=($("q").value||"").trim().toLowerCase();
+  if(filter==="excl"){
+    let list=excludeIds.map(id=>rows.find(r=>r.id===id)||{id,name:id,lots:0});
+    if(q) list=fuzzyFilter(list,q);
+    return {mode:"excl", list};
+  }
+  const HARD_PRIORITY=new Set(["8AjTFOVB","cpe1d8xz","kJD59qaP","rdt1m5ve","55VrA59M","WdVYNOia","nb0OaSNs","rA8fsgH1","skuTyVhI","vKJbSN93","vpxznHgV"]);
+  // Избранное только в верхней строке — в сетке аукциона не показываем
+  const isPrio=r=>!!(r.priority || HARD_PRIORITY.has(r.id) || HARD_PRIORITY.has(String(r.id||"").replace(/@q\d+$/,"")));
+  let list=rows.filter(r=>((r.lots||0)>0 || isPrio(r)) && !isExcl(r.id) && !isFav(r.id));
+  if(selectedCats.length) list=list.filter(r=>isPrio(r) || selectedCats.includes(itemCat(r)));
+  if(filter==="cheap") list=list.filter(r=>r.status==="cheap"||isPrio(r));
+  else if(filter==="expensive") list=list.filter(r=>r.status==="expensive"||isPrio(r));
+  else if(filter==="liquid") list=list.filter(r=>(r.sales7d||0)>=3||(r.salesToday||0)>=1||(r.soldPerDay||0)>=1||isPrio(r));
+  else if(filter==="nodata") list=list.filter(r=>!r.dataOk||isPrio(r));
+  if(q){
+    const ql=q.toLowerCase();
+    const aliases=ql.includes("пропуск")||ql.includes("pass")||ql.includes("бп")||ql.includes("battle")||ql.includes("сезон");
+    list=fuzzyFilter(list,q);
+    if(filter==="all"||aliases){
+      const extra=rows.filter(r=>{
+        if(isExcl(r.id)) return false;
+        const name=(r.name||"").toLowerCase();
+        const id=(r.id||"").toLowerCase();
+        if(name.includes(ql)||id.includes(ql)) return true;
+        if(aliases && (name.includes("пропуск")||name.includes("pass")||HARD_PRIORITY.has(r.id))) return true;
+        return false;
+      });
+      const seen=new Set(list.map(x=>x.id));
+      for(const r of extra){ if(!seen.has(r.id)){ list.push(r); seen.add(r.id);} }
+    }
+  }
+  if(sortBy==="profit"){
+    list.sort((a,b)=>(b.profitPct??-999)-(a.profitPct??-999));
+  } else {
+    list.sort((a,b)=>{
+      const ta=a.ts?Math.floor(new Date(a.ts).getTime()/60000):0;
+      const tb=b.ts?Math.floor(new Date(b.ts).getTime()/60000):0;
+      if(tb!==ta) return tb-ta;
+      const la=a.lots||0, lb=b.lots||0;
+      if(lb!==la) return lb-la;
+      return String(a.id||"").localeCompare(String(b.id||""));
+    });
+  }
+  return {mode:"main", list};
+}
+function paintAuctionList(list, mode, opts){
+  const box=$("cards");
+  if(!box) return;
+  const animateNew=!(opts&&opts.noAnim);
+  const forceFull=!!(opts&&opts.forceFull);
+  $("activeCnt").textContent=list.length?`(${list.length})`:"";
+
+  if(mode==="excl"){
+    if(!list.length){
+      box.innerHTML=`<div class="empty" style="grid-column:1/-1">Исключений нет. Нажми «−» на карточке</div>`;
+      _auctionRenderedIds=[];
+      return;
+    }
+    box.innerHTML=list.map(r=>{
+      const tier=tierBadge(r);
+      return`<div class="pcard" data-id="${esc(r.id)}">
+        <button class="pcard-excl" data-unexcl="${esc(r.id)}" title="Вернуть">+</button>
+        <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+        <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
+        <div class="pcard-price">${(r.lots||0)>0?fmt(r.minUnitPrice??r.min_price):"—"}</div>
+        <div class="pcard-status"><span class="badge m">Исключён</span></div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-unexcl]"))return;openItem(el.dataset.id)});
+    box.querySelectorAll("[data-unexcl]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();removeExclude(btn.dataset.unexcl)});
+    _auctionRenderedIds=list.map(r=>r.id);
+    return;
+  }
+
+  if(!list.length){
+    box.innerHTML=`<div class="empty" style="grid-column:1/-1">Нет лотов. Нажми «Сканировать» или смени фильтр</div>`;
+    _auctionRenderedIds=[];
+    return;
+  }
+
+  const nextIds=list.map(r=>r.id);
+  const prevIds=_auctionRenderedIds;
+  const sameOrder=!forceFull && prevIds.length===nextIds.length && prevIds.every((id,i)=>id===nextIds[i]);
+  const existingMap=new Map();
+  box.querySelectorAll(".pcard[data-id]").forEach(el=>existingMap.set(el.dataset.id, el));
+
+  if(sameOrder && existingMap.size===list.length){
+    for(const r of list){
+      const el=existingMap.get(r.id);
+      if(el) patchCardEl(el, r);
+    }
+    _auctionRenderedIds=nextIds;
+    return;
+  }
+
+  const nextSet=new Set(nextIds);
+  for(const [id,el] of existingMap){
+    if(!nextSet.has(id)) el.remove();
+  }
+  const frag=document.createDocumentFragment();
+  let newCount=0;
+  const maxStagger=8;
+  const staggerMs=40;
+
+  list.forEach((r)=>{
+    let el=existingMap.get(r.id);
+    if(el){
+      patchCardEl(el, r);
+      el.classList.remove("pcard-enter");
+      el.style.animationDelay="";
+      frag.appendChild(el);
+    } else {
+      const wrap=document.createElement("div");
+      wrap.innerHTML=cardHtml(r);
+      el=wrap.firstElementChild;
+      if(animateNew && newCount<maxStagger){
+        el.classList.add("pcard-enter");
+        el.style.animationDelay=(newCount*staggerMs)+"ms";
+        newCount++;
+        el.addEventListener("animationend",()=>{
+          el.classList.remove("pcard-enter");
+          el.style.animationDelay="";
+        },{once:true});
+      }
+      frag.appendChild(el);
+    }
+  });
+  box.querySelectorAll(".empty").forEach(e=>e.remove());
+  // remove children that weren't moved into frag
+  while(box.firstChild) box.removeChild(box.firstChild);
+  box.appendChild(frag);
+  bindCardEvents(box);
+  _auctionRenderedIds=nextIds;
+}
+function renderCards(opts){
+  const {mode, list}=getAuctionList();
+  if(opts&&opts.fromPoll && isUserBusy() && mode==="main"){
+    _pendingAuctionList={mode, list, opts};
+    return;
+  }
+  paintAuctionList(list, mode, opts);
+}
+function flushPendingAuction(){
+  if(!_pendingAuctionList) return;
+  if(isUserBusy()) return;
+  const p=_pendingAuctionList;
+  _pendingAuctionList=null;
+  paintAuctionList(p.list, p.mode, Object.assign({}, p.opts||{}, {noAnim:true}));
+}
+
+function showCatList(){
+  activeCategory=null;
+  $("catalogPane").style.display="block";
+  $("catItemsPane").style.display="none";
+  $("mainTabs").style.display="flex";
+  $("catHead").style.display="none";
+  const cf=$("catFilters"); if(cf) cf.style.display="none";
+  renderCatalog();
+}
+function itemSubCat(r){
+  const parts=String(r.category||"other").split("/");
+  return parts.length>1 ? parts.slice(1).join("/") : "";
+}
+function collectCatMeta(cat){
+  const base=rows.filter(r=>(r.category||"other").split("/")[0]===cat);
+  const subs=new Map(); // sub -> count
+  const rarities=new Set();
+  const ptns=new Set();
+  for(const r of base){
+    const sub=itemSubCat(r);
+    if(sub) subs.set(sub, (subs.get(sub)||0)+1);
+    const col=String(r.rarity||r.color||"").toUpperCase();
+    if(col) rarities.add(col);
+    if(r.minPtn!=null && Number.isFinite(Number(r.minPtn))) ptns.add(Number(r.minPtn));
+    if(r.ptn!=null && Number.isFinite(Number(r.ptn))) ptns.add(Number(r.ptn));
+  }
+  return {
+    base,
+    subs:[...subs.entries()].sort((a,b)=>a[0].localeCompare(b[0],"ru")),
+    rarities:[...rarities].sort((a,b)=>a.localeCompare(b)),
+    ptns:[...ptns].sort((a,b)=>a-b)
+  };
+}
+function renderCatFilters(cat){
+  const box=$("catFilters"); if(!box) return;
+  const st=getCatState(cat);
+  const meta=collectCatMeta(cat);
+  const isArt=cat==="artefact";
+  const isMod=cat==="attachment"||cat==="weapon_modules";
+  const isOther=cat==="other"||cat==="misc";
+  const isCons=cat==="consumables";
+  const isArmor=cat==="armor"||cat==="armour";
+  const showSub=meta.subs.length>=1 && (isArt||isMod||isOther||isCons||isArmor||cat==="weapon"||cat==="weapon_style"||cat==="armor_style");
+  const showRarity=meta.rarities.length>=1 && (isArt||isMod||isArmor||cat==="weapon"||cat==="device");
+  const showPtn=isArt && meta.ptns.length>=1;
+
+  let html="";
+  if(showSub){
+    html+=`<span class="fl">Тип</span><div class="cat-subchips" id="catSubChips">`;
+    html+=`<div class="cat-chip${st.sub===""?" on":""}" data-sub="">Все</div>`;
+    for(const [sub,cnt] of meta.subs){
+      const label=CAT_SUB_RU[sub]||CAT_SUB_RU[sub.split("/")[0]]||sub;
+      html+=`<div class="cat-chip${st.sub===sub?" on":""}" data-sub="${esc(sub)}">${esc(label)} <span class="sub">(${cnt})</span></div>`;
+    }
+    html+=`</div>`;
+  }
+  html+=`<span class="fl">Поиск</span><input type="search" id="catItemQ" placeholder="Название..." value="${esc(st.q||"")}" autocomplete="off">`;
+  if(showRarity){
+    html+=`<span class="fl">Редкость</span><select id="catRarity"><option value="">Любая</option>`;
+    for(const rr of meta.rarities){
+      html+=`<option value="${esc(rr)}"${st.rarity===rr?" selected":""}>${esc(RARITY_RU[rr]||rr)}</option>`;
+    }
+    html+=`</select>`;
+  }
+  if(showPtn){
+    html+=`<span class="fl">Заточка</span><select id="catPtn"><option value="">Любая</option>`;
+    for(const p of meta.ptns){
+      const lab=p===0?"+0":("+"+p);
+      html+=`<option value="${p}"${String(st.ptn)===String(p)?" selected":""}>${lab}</option>`;
+    }
+    html+=`</select>`;
+  }
+  html+=`<span class="fl">Сорт.</span><select id="catSort">
+    <option value="name"${st.sort==="name"?" selected":""}>По названию</option>
+    <option value="price"${st.sort==="price"?" selected":""}>По цене</option>
+    <option value="price_desc"${st.sort==="price_desc"?" selected":""}>По цене ↓</option>
+    <option value="rarity"${st.sort==="rarity"?" selected":""}>По редкости</option>
+    <option value="lots"${st.sort==="lots"?" selected":""}>По лотам</option>
+  </select>`;
+  html+=`<button type="button" class="btn" id="catFilterReset" style="padding:5px 10px;font-size:11px">Сброс</button>`;
+  box.innerHTML=html;
+  box.style.display="flex";
+
+  const apply=()=>{
+    const st2=getCatState(cat);
+    st2.q=($("catItemQ")?.value||"").trim();
+    st2.rarity=$("catRarity")?.value||"";
+    st2.ptn=$("catPtn")?.value||"";
+    st2.sort=$("catSort")?.value||"name";
+    saveCatView();
+    renderCatItems(cat);
+  };
+  box.querySelectorAll("#catSubChips .cat-chip").forEach(el=>{
+    el.onclick=()=>{
+      getCatState(cat).sub=el.dataset.sub||"";
+      saveCatView();
+      renderCatFilters(cat);
+      renderCatItems(cat);
+    };
+  });
+  $("catItemQ")?.addEventListener("input",()=>{ clearTimeout(window._catQT); window._catQT=setTimeout(apply,120); });
+  $("catRarity")?.addEventListener("change",apply);
+  $("catPtn")?.addEventListener("change",apply);
+  $("catSort")?.addEventListener("change",apply);
+  $("catFilterReset")?.addEventListener("click",()=>{
+    catViewState[cat]={sub:"",rarity:"",ptn:"",q:"",sort:"name"};
+    saveCatView();
+    renderCatFilters(cat);
+    renderCatItems(cat);
+  });
+}
+function filterCatItems(cat){
+  const st=getCatState(cat);
+  let list=rows.filter(r=>(r.category||"other").split("/")[0]===cat);
+  if(st.sub) list=list.filter(r=>itemSubCat(r)===st.sub);
+  if(st.rarity) list=list.filter(r=>String(r.rarity||r.color||"").toUpperCase()===st.rarity);
+  if(st.ptn!=="" && st.ptn!=null){
+    const p=Number(st.ptn);
+    list=list.filter(r=>{
+      const v=r.minPtn!=null?Number(r.minPtn):(r.ptn!=null?Number(r.ptn):null);
+      return v!=null && v===p;
+    });
+  }
+  const q=(st.q||"").trim().toLowerCase();
+  if(q) list=list.filter(r=>(r.name||"").toLowerCase().includes(q)||(r.id||"").toLowerCase().includes(q));
+  const rarityOrder={"DEFAULT":0,"RANK_NEWBIE":1,"RANK_STALKER":2,"RANK_VETERAN":3,"RANK_MASTER":4,"RANK_LEGEND":5,"QUEST_ITEM":6};
+  const sort=st.sort||"name";
+  list.sort((a,b)=>{
+    if(sort==="price"){
+      const ap=a.min_price??1e15, bp=b.min_price??1e15;
+      if(ap!==bp) return ap-bp;
+    } else if(sort==="price_desc"){
+      const ap=a.min_price??-1, bp=b.min_price??-1;
+      if(ap!==bp) return bp-ap;
+    } else if(sort==="lots"){
+      if((b.lots||0)!==(a.lots||0)) return (b.lots||0)-(a.lots||0);
+    } else if(sort==="rarity"){
+      const ar=rarityOrder[String(a.rarity||a.color||"").toUpperCase()]??99;
+      const br=rarityOrder[String(b.rarity||b.color||"").toUpperCase()]??99;
+      if(ar!==br) return ar-br;
+      const aq=a.minQlt??99, bq=b.minQlt??99;
+      if(aq!==bq) return aq-bq;
+    }
+    return (a.name||"").localeCompare(b.name||"","ru");
+  });
+  return list;
+}
+function renderCatItems(cat){
+  const items=filterCatItems(cat);
+  $("catItemsGrid").innerHTML=items.map(r=>{
+    const tier=tierBadge(r);
+    const favOn=isFav(r.id);
+    const sub=itemSubCat(r);
+    const subLabel=sub?(CAT_SUB_RU[sub]||CAT_SUB_RU[sub.split("/")[0]]||sub):"";
+    return`<div class="pcard" data-id="${r.id}">
+      <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
+      <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+      <div class="pcard-name" style="color:${tier?tier.color:"var(--text)"}">${esc(r.name||r.id)}</div>
+      <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${subLabel?` <span class="sub">${esc(subLabel)}</span>`:""}</div>
+      <div class="pcard-price">${(r.lots||0)>0?fmt(r.min_price):"—"}</div>
+      ${r.lots>0?`<div class="pcard-qty"><b>${fmtN(r.lots)} лот.</b></div>`:""}
+    </div>`;
+  }).join("")||`<div class="empty" style="grid-column:1/-1">Нет предметов по фильтрам</div>`;
+  $("catItemsGrid").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
+  $("catItemsGrid").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
+}
+function openCategory(cat){
+  activeCategory=cat;
+  $("catalogPane").style.display="none";
+  $("catItemsPane").style.display="block";
+  $("mainTabs").style.display="none";
+  $("catHead").style.display="flex";
+  $("catTitle").textContent=CAT_RU[cat]||cat;
+  renderCatFilters(cat);
+  renderCatItems(cat);
+}
+function renderCatalog(){
+  const q=(catFilter||"").trim().toLowerCase();
+  if(activeCategory){openCategory(activeCategory);return}
+  const groups={};
+  for(const r of rows){
+    if(q&&!(r.name||"").toLowerCase().includes(q)&&!(r.id||"").toLowerCase().includes(q)&&!(CAT_RU[(r.category||"").split("/")[0]]||"").toLowerCase().includes(q))continue;
+    const top=(r.category||"other").split("/")[0]||"other";
+    if(!groups[top])groups[top]=[];
+    groups[top].push(r);
+  }
+  // if searching items, show matching items as cards instead
+  if(q){
+    const matched=fuzzyFilter(rows,q,80);
+    if(matched.length){
+      $("catCards").innerHTML=`<div class="cards" style="grid-column:1/-1">${matched.map(r=>{
+        const tier=tierBadge(r);
+        const favOn=isFav(r.id);
+        return`<div class="pcard" data-id="${r.id}">
+          <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
+          <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
+          <div class="pcard-name">${esc(r.name||r.id)}</div>
+          <div class="pcard-price">${(r.lots||0)>0?fmt(r.min_price):"—"}</div>
+        </div>`;
+      }).join("")}</div>`;
+      $("catCards").querySelectorAll(".pcard").forEach(el=>el.onclick=e=>{if(e.target.closest("[data-fav]"))return;e.preventDefault();e.stopPropagation();openItem(el.dataset.id)});
+      $("catCards").querySelectorAll("[data-fav]").forEach(btn=>btn.onclick=e=>{e.stopPropagation();toggleFav(btn.dataset.fav)});
+      return;
+    }
+  }
+  const keys=Object.keys(groups).sort((a,b)=>(CAT_RU[a]||a).localeCompare(CAT_RU[b]||b,"ru"));
+  if(!keys.length){$("catCards").innerHTML=`<div class="empty">Пусто</div>`;return}
+  $("catCards").innerHTML=keys.map(cat=>{
+    const items=groups[cat];
+    const iconId=catIcons[cat]||items[0]?.id;
+    return`<div class="cat-card" data-cat="${esc(cat)}">
+      <div class="cat-card-icon">${iconId?`<img src="${iconUrl(iconId)}" alt="" onerror="this.style.display='none'">`:""}</div>
+      <div class="cat-card-name">${esc(CAT_RU[cat]||cat)}</div>
+      <div class="cat-card-cnt">${items.length} предм.</div>
+    </div>`;
+  }).join("");
+  $("catCards").querySelectorAll(".cat-card").forEach(card=>{
+    card.onclick=()=>openCategory(card.dataset.cat);
+  });
+}
+function saveCalc(){
+  try{
+    localStorage.setItem("sz_calc",JSON.stringify(calcIds));
+    localStorage.setItem("sz_calc_mode",calcMode);
+    localStorage.setItem("sz_calc_buy_prices",JSON.stringify(calcBuyPrices));
+    localStorage.setItem("sz_calc_buy_qty",JSON.stringify(calcBuyQty));
+    localStorage.setItem("sz_calc_sell_prices",JSON.stringify(calcSellPrices));
+    localStorage.setItem("sz_calc_sell_qty",JSON.stringify(calcSellQty));
+    localStorage.setItem("sz_calc_total_sell_prices",JSON.stringify(calcTotalSellPrices));
+    localStorage.setItem("sz_calc_total_sell_qty",JSON.stringify(calcTotalSellQty));
+  }catch{}
+}
+function calcStoresFor(mode){
+  if(mode==="buy") return {prices:calcBuyPrices, qty:calcBuyQty};
+  if(mode==="sell") return {prices:calcSellPrices, qty:calcSellQty};
+  return {prices:calcTotalSellPrices, qty:calcTotalSellQty};
+}
+function calcState(){ return calcStoresFor(calcMode); }
+function calcNum(v){
+  if(v==null) return NaN;
+  const s=String(v).replace(/\s+/g,"").replace(/,/g,".");
+  return s===""?NaN:Number(s);
+}
+/** Save visible inputs only into the mode stamped on #calcBody. Never cross buy/sell/total. */
+function persistVisibleCalcInputs(explicitMode){
+  const body=$("calcBody");
+  if(!body) return;
+  const mode=explicitMode || body.dataset.mode;
+  if(mode!=="buy" && mode!=="sell" && mode!=="totalSell") return;
+  const state=calcStoresFor(mode);
+  body.querySelectorAll("input[data-price-id]").forEach(inp=>{
+    const id=inp.dataset.priceId;
+    const raw=String(inp.value??"").trim();
+    if(raw) state.prices[id]=raw; else delete state.prices[id];
+  });
+  body.querySelectorAll("input[data-qty-id]").forEach(inp=>{
+    const id=inp.dataset.qtyId;
+    const raw=String(inp.value??"").trim();
+    if(raw) state.qty[id]=raw; else delete state.qty[id];
+  });
+  saveCalc();
+}
+function bindCalcInputs(){
+  const body=$("calcBody");
+  if(!body) return;
+  body.querySelectorAll("input[data-price-id]").forEach(inp=>{
+    inp.oninput=()=>{
+      const mode=body.dataset.mode || calcMode;
+      const state=calcStoresFor(mode);
+      const id=inp.dataset.priceId;
+      let raw=inp.value.replace(/[^0-9.,]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      raw=raw.trim();
+      if(!raw) delete state.prices[id]; else state.prices[id]=raw;
+      saveCalc();
+      recalcCalc();
+    };
+  });
+  body.querySelectorAll("input[data-qty-id]").forEach(inp=>{
+    inp.oninput=()=>{
+      const mode=body.dataset.mode || calcMode;
+      const state=calcStoresFor(mode);
+      const id=inp.dataset.qtyId;
+      let raw=inp.value.replace(/[^0-9]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      raw=raw.trim();
+      if(!raw) delete state.qty[id]; else state.qty[id]=raw;
+      saveCalc();
+      recalcCalc();
+    };
+    inp.onkeydown=e=>{
+      if(e.key==="Enter"){
+        e.preventDefault();
+        const x=inp.closest("tr")?.querySelector("input[data-price-id]");
+        if(x){ x.focus(); x.select(); }
+      }
+    };
+  });
+  body.querySelectorAll(".rm").forEach(btn=>{
+    btn.onclick=()=>{
+      const rid=btn.dataset.id;
+      calcIds=calcIds.filter(x=>x!==rid);
+      delete calcBuyPrices[rid]; delete calcBuyQty[rid];
+      delete calcSellPrices[rid]; delete calcSellQty[rid];
+      delete calcTotalSellPrices[rid]; delete calcTotalSellQty[rid];
+      saveCalc();
+      renderCalc({skipPersist:true});
+    };
+  });
+}
+function recalcCalc(){
+  const state=calcStoresFor(calcMode);
+  let totalBuy=0, totalPlayer=0, totalAuction=0, hasBuy=false, hasSale=false;
+  const details=[];
+  for(const id of calcIds){
+    const r=rows.find(x=>x.id===id)||{id,name:id};
+    const price=calcNum(state.prices[id]);
+    const qty=calcNum(state.qty[id]);
+    const vq=Number.isFinite(qty)&&qty>0;
+    const vp=Number.isFinite(price)&&price>=0;
+    let unit=NaN, player=NaN, auction=NaN, commission=NaN;
+    if(vq&&vp){
+      if(calcMode==="buy"){ totalBuy+=price; hasBuy=true; unit=price/qty; }
+      else if(calcMode==="sell"){
+        unit=price; player=price*qty; commission=player*0.05; auction=player-commission;
+        totalPlayer+=player; totalAuction+=auction; hasSale=true;
+      }else{
+        player=price; unit=price/qty; commission=player*0.05; auction=player-commission;
+        totalPlayer+=player; totalAuction+=auction; hasSale=true;
+      }
+    }
+    const tr=document.querySelector(`tr[data-calc-id="${CSS.escape(id)}"]`);
+    if(tr){
+      const u=tr.querySelector(".calc-unit");
+      const a=tr.querySelector(".calc-auction");
+      const pl=tr.querySelector(".calc-player");
+      if(u) u.textContent=Number.isFinite(unit)?fmt(unit):"—";
+      if(a) a.textContent=Number.isFinite(auction)?fmt(auction):"—";
+      if(pl) pl.textContent=Number.isFinite(player)?fmt(player):"—";
+    }
+    let h=`<div class="calc-item-info"><div class="title">${esc(r.name||id)}</div>`;
+    if(calcMode==="buy"){
+      h+=`<div class="info-row"><span>Количество</span><b>${vq?fmt(qty):"—"}</b></div>
+        <div class="info-row"><span>Общая цена покупки</span><b>${vp?fmt(price):"—"}</b></div>
+        <div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):"—"}</b></div>`;
+    }else if(calcMode==="sell"){
+      h+=`<div class="info-row"><span>Цена за 1 шт.</span><b>${vp?fmt(price):"—"}</b></div>
+        <div class="info-row"><span>Количество</span><b>${vq?fmt(qty):"—"}</b></div>
+        <div class="info-row"><span>Продажа игроку</span><b>${Number.isFinite(player)?fmt(player):"—"}</b></div>
+        <div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):"—"}</b></div>
+        <div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):"—"}</b></div>`;
+    }else{
+      h+=`<div class="info-row"><span>Общая цена товара</span><b>${vp?fmt(price):"—"}</b></div>
+        <div class="info-row"><span>Количество</span><b>${vq?fmt(qty):"—"}</b></div>
+        <div class="info-row"><span>Цена за 1 шт.</span><b>${Number.isFinite(unit)?fmt(unit):"—"}</b></div>
+        <div class="info-row"><span>Комиссия аукциона 5%</span><b>${Number.isFinite(commission)?fmt(commission):"—"}</b></div>
+        <div class="info-row"><span>Получишь на аукционе</span><b class="g">${Number.isFinite(auction)?fmt(auction):"—"}</b></div>`;
+    }
+    details.push(h+"</div>");
+  }
+  $("sumBuy").textContent=hasBuy?fmt(totalBuy):"—";
+  $("sumPlayer").textContent=hasSale?fmt(totalPlayer):"—";
+  $("sumAuctionNet").textContent=hasSale?fmt(totalAuction):"—";
+  $("calcDetails").innerHTML=details.join("");
+}
+function updateCalcMode(){
+  const buy=calcMode==="buy", sell=calcMode==="sell", total=calcMode==="totalSell";
+  $("calcBuyMode")?.classList.toggle("active", buy);
+  $("calcSellMode")?.classList.toggle("active", sell);
+  $("calcTotalSellMode")?.classList.toggle("active", total);
+  if($("calcModeHint")){
+    $("calcModeHint").textContent=buy
+      ?"Покупка: общая цена ÷ количество"
+      :sell?"Продажа: цена за 1 шт. × количество"
+      :"Общ. продажа: общая цена ÷ количество, аукцион −5%";
+  }
+  if($("calcMarketBlock")) $("calcMarketBlock").style.display="block";
+  if($("calcHead")){
+    $("calcHead").innerHTML=buy
+      ?"<th>Предмет</th><th>Количество</th><th>Цена всего</th><th>Цена / шт.</th><th></th>"
+      :sell?"<th>Предмет</th><th>Цена / шт.</th><th>Количество</th><th>Продажа игроку</th><th>Аукцион −5%</th><th></th>"
+      :"<th>Предмет</th><th>Общая цена</th><th>Количество</th><th>Цена / шт.</th><th>Аукцион −5%</th><th></th>";
+  }
+  if($("calcBuySummary")) $("calcBuySummary").style.display=buy?"block":"none";
+  if($("calcSellSummary")) $("calcSellSummary").style.display=buy?"none":"block";
+}
+function copyPlainNumber(n, el){
+  if(n==null || !Number.isFinite(Number(n))) return;
+  const text=String(Math.round(Number(n)));
+  const flash=()=>{
+    if(!el) return;
+    const prev=el.style.borderColor;
+    el.style.borderColor="var(--neon)";
+    el.style.background="var(--glow)";
+    setTimeout(()=>{ el.style.borderColor=prev||"transparent"; el.style.background=""; },450);
+  };
+  const done=()=>{ flash(); try{ if(navigator.vibrate) navigator.vibrate(12); }catch{} };
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>{
+      const ta=document.createElement("textarea");
+      ta.value=text; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand("copy"); }catch{}
+      ta.remove(); done();
+    });
+  }else{
+    const ta=document.createElement("textarea");
+    ta.value=text; document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); }catch{}
+    ta.remove(); done();
+  }
+}
+function recalcPod(){
+  let total=0, lines=0;
+  for(const r of podRows){
+    const p=calcNum(r.price), q=calcNum(r.qty);
+    const sum=(Number.isFinite(p)&&p>=0&&Number.isFinite(q)&&q>0)?p*q:NaN;
+    const cell=document.querySelector(`#podBody tr[data-pod-id="${CSS.escape(r.id)}"] .pod-line-sum`);
+    if(cell){
+      cell.textContent=Number.isFinite(sum)?fmt(sum):"—";
+      cell.dataset.raw=Number.isFinite(sum)?String(Math.round(sum)):"";
+      cell.classList.add("pod-copy");
+      cell.title=Number.isFinite(sum)?"Нажми, чтобы скопировать":"";
+      cell.style.cursor=Number.isFinite(sum)?"pointer":"default";
+    }
+    if(Number.isFinite(sum)){ total+=sum; lines++; }
+  }
+  const el=$("podSum");
+  if(el){
+    el.textContent=lines?fmt(total):"—";
+    el.dataset.raw=lines?String(Math.round(total)):"";
+  }
+  if($("podLines")) $("podLines").textContent=String(lines);
+}
+function bindPodInputs(){
+  const body=$("podBody"); if(!body) return;
+  body.querySelectorAll("input[data-pod-name]").forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.podName;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      row.name=inp.value;
+      inp.style.color=podColorHex(row.color);
+      savePod();
+    };
+  });
+  body.querySelectorAll(".pod-color-btn").forEach(btn=>{
+    btn.onclick=e=>{
+      e.stopPropagation();
+      const id=btn.dataset.podId;
+      body.querySelectorAll(".pod-color-pop").forEach(p=>{
+        if(p.dataset.podId!==id) p.style.display="none";
+      });
+      const pop=body.querySelector(`.pod-color-pop[data-pod-id="${CSS.escape(id)}"]`);
+      if(!pop) return;
+      const open=pop.style.display==="none"||!pop.style.display;
+      pop.style.display=open?"grid":"none";
+    };
+  });
+  body.querySelectorAll(".pod-swatch").forEach(btn=>{
+    btn.onclick=e=>{
+      e.stopPropagation();
+      const id=btn.dataset.podId;
+      const hex=btn.dataset.hex;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      row.color=hex;
+      const nameInp=body.querySelector(`input[data-pod-name="${CSS.escape(id)}"]`);
+      if(nameInp) nameInp.style.color=hex;
+      const main=body.querySelector(`.pod-color-btn[data-pod-id="${CSS.escape(id)}"]`);
+      if(main){ main.style.background=hex; main.style.boxShadow=`0 0 0 2px ${hex}55`; }
+      const pop=body.querySelector(`.pod-color-pop[data-pod-id="${CSS.escape(id)}"]`);
+      if(pop){
+        pop.style.display="none";
+        pop.querySelectorAll(".pod-swatch").forEach(s=>{
+          s.style.outline=s.dataset.hex===hex?"2px solid #fff":"1px solid rgba(255,255,255,.2)";
+        });
+      }
+      savePod();
+    };
+  });
+  body.querySelectorAll("input[data-pod-price]").forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.podPrice;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      let raw=inp.value.replace(/[^0-9.,]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      row.price=raw.trim();
+      savePod(); recalcPod();
+    };
+  });
+  body.querySelectorAll("input[data-pod-qty]").forEach(inp=>{
+    inp.oninput=()=>{
+      const id=inp.dataset.podQty;
+      const row=podRows.find(x=>x.id===id); if(!row) return;
+      let raw=inp.value.replace(/[^0-9]/g,"");
+      if(raw!==inp.value) inp.value=raw;
+      row.qty=raw.trim();
+      savePod(); recalcPod();
+    };
+    inp.onkeydown=e=>{
+      if(e.key==="Enter"){
+        e.preventDefault();
+        const next=inp.closest("tr")?.nextElementSibling?.querySelector("input[data-pod-qty]");
+        if(next){ next.focus(); next.select(); }
+      }
+    };
+  });
+  body.querySelectorAll(".pod-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      podRows=podRows.filter(x=>x.id!==btn.dataset.id);
+      savePod(); renderPod({skipFocus:true});
+    };
+  });
+}
+
+function reorderPodRows(fromId, toId, placeAfter){
+  const from=podRows.findIndex(r=>r.id===fromId);
+  const to=podRows.findIndex(r=>r.id===toId);
+  if(from<0||to<0||from===to) return false;
+  const [item]=podRows.splice(from,1);
+  let insertAt=podRows.findIndex(r=>r.id===toId);
+  if(insertAt<0) return false;
+  if(placeAfter) insertAt+=1;
+  podRows.splice(insertAt,0,item);
+  savePod();
+  return true;
+}
+function bindPodDrag(body){
+  if(!body) return;
+  let dragId=null, activeTr=null, lastTarget=null, lastPlace=null;
+  const clearMarks=()=>{
+    body.querySelectorAll("tr.pod-drop-before,tr.pod-drop-after,tr.pod-dragging").forEach(tr=>{
+      tr.classList.remove("pod-drop-before","pod-drop-after","pod-dragging");
+    });
+  };
+  const onMove=(e)=>{
+    if(!dragId) return;
+    e.preventDefault();
+    const y=e.touches?e.touches[0].clientY:e.clientY;
+    const x=e.touches?e.touches[0].clientX:e.clientX;
+    const el=document.elementFromPoint(x,y);
+    const tr=el&&el.closest?el.closest("#podBody tr[data-pod-id]"):null;
+    clearMarks();
+    if(activeTr) activeTr.classList.add("pod-dragging");
+    if(!tr || tr.dataset.podId===dragId){ lastTarget=null; return; }
+    const rect=tr.getBoundingClientRect();
+    const after=(y-rect.top)>rect.height/2;
+    tr.classList.add(after?"pod-drop-after":"pod-drop-before");
+    lastTarget=tr.dataset.podId;
+    lastPlace=after?"after":"before";
+  };
+  const onEnd=(e)=>{
+    if(!dragId) return;
+    e.preventDefault();
+    const from=dragId, to=lastTarget, place=lastPlace;
+    dragId=null; activeTr=null; lastTarget=null; lastPlace=null;
+    clearMarks();
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onEnd);
+    document.removeEventListener("pointercancel", onEnd);
+    document.removeEventListener("touchmove", onMove, {passive:false});
+    document.removeEventListener("touchend", onEnd);
+    if(to && from!==to){
+      if(reorderPodRows(from, to, place==="after")) renderPod({skipFocus:true});
+    }
+  };
+  body.querySelectorAll(".pod-drag").forEach(handle=>{
+    handle.addEventListener("pointerdown", e=>{
+      if(e.button!=null && e.button!==0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragId=handle.dataset.podDrag;
+      activeTr=handle.closest("tr");
+      clearMarks();
+      if(activeTr) activeTr.classList.add("pod-dragging");
+      try{ handle.setPointerCapture(e.pointerId); }catch{}
+      document.addEventListener("pointermove", onMove, {passive:false});
+      document.addEventListener("pointerup", onEnd);
+      document.addEventListener("pointercancel", onEnd);
+    });
+    // touch fallback
+    handle.addEventListener("touchstart", e=>{
+      if(dragId) return;
+      e.preventDefault();
+      dragId=handle.dataset.podDrag;
+      activeTr=handle.closest("tr");
+      clearMarks();
+      if(activeTr) activeTr.classList.add("pod-dragging");
+      document.addEventListener("touchmove", onMove, {passive:false});
+      document.addEventListener("touchend", onEnd);
+    }, {passive:false});
+  });
+}
+
+function renderPod(opts){
+  const body=$("podBody"); if(!body) return;
+  if(!podRows.length){
+    body.innerHTML=`<tr><td colspan="6" class="empty" style="padding:20px">Нажми «+ Строка» — добавь товар и цену / шт.</td></tr>`;
+    recalcPod();
+    return;
+  }
+  const focused=document.activeElement;
+  const keep=focused&&focused.closest&&focused.closest("#podBody")?{
+    field: focused.dataset.podName?"name":focused.dataset.podPrice?"price":focused.dataset.podQty?"qty":focused.dataset.podColor?"color":null,
+    id: focused.dataset.podName||focused.dataset.podPrice||focused.dataset.podQty||focused.dataset.podColor,
+    start: focused.selectionStart, end: focused.selectionEnd
+  }:null;
+
+  body.innerHTML=podRows.map(r=>{
+    const hex=podColorHex(r.color);
+    const swatches=POD_COLORS.map(h=>{
+      const on=h.toLowerCase()===hex.toLowerCase();
+      return `<button type="button" class="pod-swatch" data-pod-id="${esc(r.id)}" data-hex="${h}"
+        style="width:22px;height:22px;border-radius:5px;background:${h};border:none;padding:0;cursor:pointer;
+        outline:${on?"2px solid #fff":"1px solid rgba(255,255,255,.2)"};box-shadow:${on?"0 0 6px rgba(255,255,255,.35)":"none"}"></button>`;
+    }).join("");
+    return `<tr data-pod-id="${esc(r.id)}">
+      <td class="pod-drag-td" style="vertical-align:middle">
+        <button type="button" class="pod-drag" data-pod-drag="${esc(r.id)}" title="Перетащить" aria-label="Перетащить">☰</button>
+      </td>
+      <td style="vertical-align:middle;width:48px">
+        <div class="pod-color-wrap" style="position:relative;display:inline-block">
+          <button type="button" class="pod-color-btn" data-pod-id="${esc(r.id)}" title="Цвет"
+            style="width:28px;height:28px;border-radius:7px;background:${hex};border:1px solid var(--border);
+            cursor:pointer;box-shadow:0 0 0 2px ${hex}55;padding:0"></button>
+          <div class="pod-color-pop" data-pod-id="${esc(r.id)}"
+            style="display:none;position:absolute;left:0;top:34px;z-index:50;grid-template-columns:repeat(5,22px);gap:5px;
+            padding:8px;background:#0a0a0a;border:1px solid var(--border);border-radius:10px;
+            box-shadow:0 12px 28px rgba(0,0,0,.75),0 0 12px var(--glow)">${swatches}</div>
+        </div>
+      </td>
+      <td><input type="text" data-pod-name="${esc(r.id)}" value="${esc(r.name||"")}" placeholder="Название" autocomplete="off" style="color:${hex};font-weight:600;width:100%;min-width:100px;background:var(--bg);border:1px solid var(--border);padding:7px 8px;border-radius:6px"></td>
+      <td><input type="text" inputmode="decimal" data-pod-price="${esc(r.id)}" value="${esc(String(r.price??""))}" placeholder="Цена / шт." autocomplete="off"></td>
+      <td><input type="text" inputmode="numeric" data-pod-qty="${esc(r.id)}" value="${esc(String(r.qty??""))}" placeholder="Кол-во" autocomplete="off"></td>
+      <td class="pod-line-sum pod-copy" style="font-weight:700;color:var(--neon2);user-select:none;padding:2px 6px;border-radius:6px;border:1px dashed transparent">—</td>
+      <td><button type="button" class="rm pod-rm" data-id="${esc(r.id)}">×</button></td>
+    </tr>`;
+  }).join("");
+  bindPodInputs();
+  bindPodDrag(body);
+  body.querySelectorAll(".pod-line-sum").forEach(cell=>{
+    cell.onclick=()=>{ const n=Number(cell.dataset.raw); if(Number.isFinite(n)) copyPlainNumber(n, cell); };
+  });
+  recalcPod();
+  if(keep&&keep.field&&!opts?.skipFocus){
+    requestAnimationFrame(()=>{
+      const attr=keep.field==="name"?"data-pod-name":keep.field==="price"?"data-pod-price":keep.field==="qty"?"data-pod-qty":null;
+      if(!attr) return;
+      const el=document.querySelector(`#podBody [${attr}="${CSS.escape(keep.id)}"]`);
+      if(el){
+        el.focus({preventScroll:true});
+        try{ if(el.setSelectionRange) el.setSelectionRange(keep.start, keep.end); }catch{}
+      }
+    });
+  }
+}
+function podAddRow(){
+  podRows.push({id:podNewId(), name:"", color:"#f2f2f2", price:"", qty:""});
+  savePod();
+  renderPod({skipFocus:true});
+  requestAnimationFrame(()=>{
+    const last=document.querySelector("#podBody tr:last-child input[data-pod-name]");
+    if(last) last.focus();
+  });
+}
+
+/* ===== Сделки (журнал перекупа) ===== */
+let dealsList=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_deals")||"[]"); }catch{ return []; } })();
+if(!Array.isArray(dealsList)) dealsList=[];
+let dealFilter="all"; // all | today | plus | minus
+function saveDeals(){ try{ localStorage.setItem("sz_deals", JSON.stringify(dealsList)); }catch{} }
+function dealProfit(buy, sell){
+  const b=calcNum(buy), s=calcNum(sell);
+  if(!Number.isFinite(b)||!Number.isFinite(s)) return NaN;
+  return Math.round(s*0.95 - b);
+}
+function isSameLocalDay(ts){
+  if(!ts) return false;
+  const d=new Date(ts), n=new Date();
+  return d.getFullYear()===n.getFullYear()&&d.getMonth()===n.getMonth()&&d.getDate()===n.getDate();
+}
+function updateDealPreview(){
+  const buy=calcNum($("dealBuy")?.value), sell=calcNum($("dealSell")?.value);
+  const netEl=$("dealNetPreview"), profitEl=$("dealProfitPreview");
+  if(!netEl||!profitEl) return;
+  if(Number.isFinite(sell)&&sell>=0){
+    const net=Math.round(sell*0.95);
+    netEl.textContent=fmt(net);
+    netEl.style.color="var(--text)";
+  }else{ netEl.textContent="—"; netEl.style.color="var(--muted)"; }
+  if(Number.isFinite(buy)&&Number.isFinite(sell)){
+    const p=dealProfit(buy, sell);
+    profitEl.textContent=(p>0?"+":"")+fmt(p);
+    profitEl.style.color=p>0?"var(--green)":p<0?"var(--red)":"var(--muted)";
+  }else{ profitEl.textContent="—"; profitEl.style.color="var(--muted)"; }
+}
+function filteredDeals(){
+  return dealsList.filter(d=>{
+    const p=dealProfit(d.buy, d.sell);
+    if(dealFilter==="today" && !isSameLocalDay(d.ts)) return false;
+    if(dealFilter==="plus" && !(p>0)) return false;
+    if(dealFilter==="minus" && !(p<0)) return false;
+    return true;
+  });
+}
+function renderDeals(){
+  const list=$("dealsList"); if(!list) return;
+  const items=filteredDeals();
+  let sumAll=0, sumToday=0, sumFilt=0;
+  for(const d of dealsList){
+    const p=dealProfit(d.buy, d.sell);
+    if(!Number.isFinite(p)) continue;
+    sumAll+=p;
+    if(isSameLocalDay(d.ts)) sumToday+=p;
+  }
+  for(const d of items){
+    const p=dealProfit(d.buy, d.sell);
+    if(Number.isFinite(p)) sumFilt+=p;
+  }
+  const totalEl=$("dealTotal");
+  if(totalEl){
+    totalEl.textContent=items.length?((sumFilt>0?"+":"")+fmt(sumFilt)):"—";
+    totalEl.style.color=sumFilt>0?"var(--green)":sumFilt<0?"var(--red)":"var(--neon2)";
+    totalEl.dataset.raw=String(Math.round(sumFilt));
+  }
+  if($("dealCount")) $("dealCount").textContent=String(items.length);
+  if($("dealTodayTotal")){
+    $("dealTodayTotal").textContent=dealsList.some(d=>isSameLocalDay(d.ts))?((sumToday>0?"+":"")+fmt(sumToday)):"—";
+    $("dealTodayTotal").style.color=sumToday>0?"var(--green)":sumToday<0?"var(--red)":"var(--muted)";
+  }
+  ["dealFilterAll","dealFilterToday","dealFilterPlus","dealFilterMinus"].forEach(id=>{
+    const el=$(id); if(!el) return;
+    const map={dealFilterAll:"all",dealFilterToday:"today",dealFilterPlus:"plus",dealFilterMinus:"minus"};
+    el.classList.toggle("active", dealFilter===map[id]);
+  });
+  if(!items.length){
+    list.innerHTML=`<div class="empty">Пока нет сделок${dealFilter!=="all"?" по фильтру":""}</div>`;
+    return;
+  }
+  list.innerHTML=items.map(d=>{
+    const p=dealProfit(d.buy, d.sell);
+    const net=Math.round(calcNum(d.sell)*0.95);
+    const col=p>0?"var(--green)":p<0?"var(--red)":"var(--muted)";
+    const when=d.ts?new Date(d.ts).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+    return `<div class="calc-item-info" style="margin-bottom:8px">
+      <div class="title" style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+        <span>${esc(d.name||d.itemId||"?")}${d.custom?` <span class="badge m">свой</span>`:""}</span>
+        <button type="button" class="rm deal-rm" data-id="${esc(d.id)}" title="Удалить">×</button>
+      </div>
+      <div class="info-row"><span>Купил</span><b>${fmt(d.buy)}</b></div>
+      <div class="info-row"><span>Продал (лот)</span><b>${fmt(d.sell)}</b></div>
+      <div class="info-row"><span>После −5%</span><b>${fmt(net)}</b></div>
+      <div class="info-row"><span>Профит</span><b style="color:${col}">${(p>0?"+":"")}${fmt(p)}</b></div>
+      <div class="info-row"><span>Когда</span><b class="sub" style="font-weight:400">${when}</b></div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll(".deal-rm").forEach(btn=>{
+    btn.onclick=()=>{
+      dealsList=dealsList.filter(x=>x.id!==btn.dataset.id);
+      saveDeals(); renderDeals();
+    };
+  });
+}
+function addDealFromForm(){
+  const itemId=($("dealItemId")?.value||"").trim();
+  const name=($("dealItemName")?.textContent||"").trim();
+  const buy=($("dealBuy")?.value||"").trim();
+  const sell=($("dealSell")?.value||"").trim();
+  const b=calcNum(buy), s=calcNum(sell);
+  if(!itemId && name==="Предмет не выбран"){ alert("Выбери предмет из поиска или добавь свой"); return; }
+  if(!Number.isFinite(b)||b<0){ alert("Укажи сумму покупки"); return; }
+  if(!Number.isFinite(s)||s<0){ alert("Укажи цену продажи на аукционе"); return; }
+  dealsList.unshift({
+    id:"d"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+    itemId: itemId||"",
+    name: (name && name!=="Предмет не выбран")?name:(itemId||"Без названия"),
+    buy: String(Math.round(b)),
+    sell: String(Math.round(s)),
+    custom: !!(itemId && String(itemId).startsWith("custom_")),
+    ts: new Date().toISOString()
+  });
+  saveDeals();
+  if($("dealBuy")) $("dealBuy").value="";
+  if($("dealSell")) $("dealSell").value="";
+  updateDealPreview();
+  renderDeals();
+}
+function updateDealCustomPreview(){
+  const buy=calcNum($("dealCustomBuy")?.value), sell=calcNum($("dealCustomSell")?.value);
+  const netEl=$("dealCustomNet"), profitEl=$("dealCustomProfit");
+  if(!netEl||!profitEl) return;
+  if(Number.isFinite(sell)&&sell>=0){
+    netEl.textContent=fmt(Math.round(sell*0.95));
+    netEl.style.color="var(--text)";
+  }else{ netEl.textContent="—"; netEl.style.color="var(--muted)"; }
+  if(Number.isFinite(buy)&&Number.isFinite(sell)){
+    const p=dealProfit(buy, sell);
+    profitEl.textContent=(p>0?"+":"")+fmt(p);
+    profitEl.style.color=p>0?"var(--green)":p<0?"var(--red)":"var(--muted)";
+  }else{ profitEl.textContent="—"; profitEl.style.color="var(--muted)"; }
+}
+function setDealCustomOpen(open){
+  const box=$("dealCustomBox");
+  if(!box) return;
+  box.style.display=open?"block":"none";
+  if(open) $("dealCustomName")?.focus();
+}
+function addCustomDealFromForm(){
+  const name=($("dealCustomName")?.value||"").trim();
+  const qtyRaw=($("dealCustomQty")?.value||"").trim();
+  const buy=($("dealCustomBuy")?.value||"").trim();
+  const sell=($("dealCustomSell")?.value||"").trim();
+  const b=calcNum(buy), s=calcNum(sell), q=calcNum(qtyRaw);
+  if(!name){ alert("Укажи название предмета"); return; }
+  if(!Number.isFinite(b)||b<0){ alert("Укажи сумму покупки"); return; }
+  if(!Number.isFinite(s)||s<0){ alert("Укажи цену продажи"); return; }
+  const qty=(Number.isFinite(q)&&q>0)?Math.round(q):1;
+  const customId="custom_"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  dealsList.unshift({
+    id:"d"+Date.now().toString(36)+Math.random().toString(36).slice(2,5),
+    itemId: customId,
+    name: name+(qty!==1?" ×"+qty:""),
+    qty: String(qty),
+    buy: String(Math.round(b)),
+    sell: String(Math.round(s)),
+    custom: true,
+    ts: new Date().toISOString()
+  });
+  saveDeals();
+  if($("dealCustomName")) $("dealCustomName").value="";
+  if($("dealCustomQty")) $("dealCustomQty").value="1";
+  if($("dealCustomBuy")) $("dealCustomBuy").value="";
+  if($("dealCustomSell")) $("dealCustomSell").value="";
+  updateDealCustomPreview();
+  setDealCustomOpen(false);
+  renderDeals();
+}
+function updateDealSuggest(){
+  const q=($("dealQ")?.value||"").trim().toLowerCase();
+  const box=$("dealSuggest"); if(!box) return;
+  if(q.length<1){ box.classList.remove("open"); return; }
+  const hits=fuzzyFilter(rows,q,12);
+  if(!hits.length){ box.classList.remove("open"); return; }
+  box.innerHTML=hits.map(r=>`<div data-id="${esc(r.id)}" data-name="${esc(r.name||r.id)}">${esc(r.name||r.id)} <span class="sub">${(r.lots||0)>0?fmt(r.min_price):"нет лотов"}</span></div>`).join("");
+  box.classList.add("open");
+  box.querySelectorAll("div").forEach(d=>{
+    d.onclick=()=>{
+      $("dealItemId").value=d.dataset.id||"";
+      $("dealItemName").textContent=d.dataset.name||d.dataset.id||"";
+      $("dealItemName").style.color="var(--neon2)";
+      $("dealQ").value="";
+      box.classList.remove("open");
+      $("dealBuy")?.focus();
+    };
+  });
+}
+function showRightTab(tab){
+  rightTab=tab;
+  activeCategory=null;
+  $("catHead").style.display="none";
+  $("mainTabs").style.display="flex";
+  document.querySelectorAll("#mainTabs .tab").forEach(t=>t.classList.toggle("active", t.dataset.tab===tab));
+  if($("catalogPane")) $("catalogPane").style.display=tab==="catalog"?"block":"none";
+  if($("catItemsPane")) $("catItemsPane").style.display="none";
+  if($("calcPane")) $("calcPane").style.display=tab==="calc"?"block":"none";
+  if($("perekupPane")) $("perekupPane").style.display=tab==="perekup"?"block":"none";
+  if($("dealsPane")) $("dealsPane").style.display=tab==="deals"?"block":"none";
+  if(tab==="catalog") renderCatalog();
+  if(tab==="calc") renderCalc();
+  if(tab==="perekup") renderPod();
+  if(tab==="deals") renderDeals();
+}
+function renderCalc(opts){
+  const skipPersist=!!(opts&&opts.skipPersist);
+  const body=$("calcBody");
+  if(!skipPersist && body && body.dataset.mode && body.dataset.mode!=="pod"){
+    persistVisibleCalcInputs(body.dataset.mode);
+  }
+  updateCalcMode();
+  const state=calcStoresFor(calcMode);
+  const focused=document.activeElement;
+  const isFocused=focused&&focused.matches&&focused.matches("#calcBody input[data-qty-id],#calcBody input[data-price-id]");
+  const restore=isFocused&&body&&body.dataset.mode===calcMode?{
+    kind:focused.dataset.qtyId?"qty":"price",
+    id:focused.dataset.qtyId||focused.dataset.priceId,
+    start:focused.selectionStart,
+    end:focused.selectionEnd
+  }:null;
+
+  // Keep caret only if still on the SAME mode table
+  if(isFocused && body && body.dataset.mode===calcMode){
+    const existing=Array.from(body.querySelectorAll("tr[data-calc-id]")).map(tr=>tr.dataset.calcId);
+    const same=existing.length===calcIds.length && calcIds.every((id,i)=>existing[i]===id);
+    if(same){ recalcCalc(); return; }
+  }
+
+  if(!calcIds.length){
+    body.innerHTML=`<tr><td colspan="${calcMode==="buy"?5:6}" class="empty" style="padding:24px">Найди предмет сверху и добавь</td></tr>`;
+    body.dataset.mode=calcMode;
+    $("calcDetails").innerHTML="";
+    recalcCalc();
+    return;
+  }
+
+  body.innerHTML=calcIds.map(id=>{
+    const r=rows.find(x=>x.id===id)||{id,name:id};
+    const price=state.prices[id]??"";
+    const qty=state.qty[id]??"";
+    if(calcMode==="buy"){
+      return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
+        <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество" autocomplete="off"></td>
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена всего" autocomplete="off"></td>
+        <td class="calc-unit">—</td>
+        <td><button class="rm" data-id="${esc(id)}" type="button">×</button></td></tr>`;
+    }
+    if(calcMode==="sell"){
+      return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
+        <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Цена / шт." autocomplete="off"></td>
+        <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество" autocomplete="off"></td>
+        <td class="calc-player">—</td>
+        <td class="calc-auction">—</td>
+        <td><button class="rm" data-id="${esc(id)}" type="button">×</button></td></tr>`;
+    }
+    return `<tr data-calc-id="${esc(id)}"><td>${esc(r.name||id)}</td>
+      <td><input type="text" inputmode="decimal" data-price-id="${esc(id)}" value="${esc(String(price))}" placeholder="Общая цена" autocomplete="off"></td>
+      <td><input type="text" inputmode="numeric" data-qty-id="${esc(id)}" value="${esc(String(qty))}" placeholder="Количество" autocomplete="off"></td>
+      <td class="calc-unit">—</td>
+      <td class="calc-auction">—</td>
+      <td><button class="rm" data-id="${esc(id)}" type="button">×</button></td></tr>`;
+  }).join("");
+  body.dataset.mode=calcMode;
+  bindCalcInputs();
+  recalcCalc();
+  if(restore){
+    requestAnimationFrame(()=>{
+      const attr=restore.kind==="qty"?"data-qty-id":"data-price-id";
+      const el=document.querySelector(`#calcBody input[${attr}="${CSS.escape(restore.id)}"]`);
+      if(el){
+        el.focus({preventScroll:true});
+        try{ el.setSelectionRange(restore.start, restore.end); }catch{}
+      }
+    });
+  }
+}
+function switchCalcMode(next){
+  if(next===calcMode) return;
+  const body=$("calcBody");
+  if(body && body.dataset.mode && body.dataset.mode!=="pod") persistVisibleCalcInputs(body.dataset.mode);
+  calcMode=next;
+  saveCalc();
+  renderCalc({skipPersist:true});
+}
+
+window.addEventListener("pagehide",persistVisibleCalcInputs);
+window.addEventListener("beforeunload",persistVisibleCalcInputs);
+
+function updateCalcSuggest(){
+  const q=($("calcQ").value||"").trim().toLowerCase();
+  const box=$("calcSuggest");
+  if(q.length<1){box.classList.remove("open");return}
+  const hits=fuzzyFilter(rows,q,12);
+  if(!hits.length){box.classList.remove("open");return}
+  box.innerHTML=hits.map(r=>`<div data-id="${r.id}">${esc(r.name||r.id)} <span class="sub">${(r.lots||0)>0?fmt(r.min_price):"нет лотов"}</span></div>`).join("");
+  box.classList.add("open");
+  box.querySelectorAll("div").forEach(d=>{
+    d.onclick=()=>{
+      const id=d.dataset.id;
+      if(!calcIds.includes(id))calcIds.push(id);
+      saveCalc();renderCalc();
+      $("calcQ").value="";box.classList.remove("open");
+    };
+  });
+}
+const itemCache={};
+function saveScrollState(){
+  const out=[];
+  document.querySelectorAll(".scroll,.table-scroll,#dBody,.drawer-body").forEach((el,i)=>{
+    out.push([i, el.scrollTop, el.scrollLeft, el.id||el.className]);
+  });
+  const db=$("dBody");
+  if(db) window._drawerBodyScroll=db.scrollTop;
+  return out;
+}
+function restoreScrollState(state){
+  if(!state)return;
+  const els=document.querySelectorAll(".scroll,.table-scroll,#dBody,.drawer-body");
+  state.forEach(([i,top,left])=>{
+    const el=els[i];
+    if(el){el.scrollTop=top;el.scrollLeft=left;}
+  });
+}
+
+async function openItem(id,silent){
+  if(!silent)copyItemName(id);
+  activeId=id;
+  if(!silent){ window._drawerHistoryAt=0; renderCards(); renderFavs(); }
+  $("drawer").classList.add("open");$("overlay").classList.add("show");
+  // Lock body scroll under drawer on mobile
+  document.body.style.overflow="hidden";
+  const row=rows.find(r=>r.id===id)||{};const tier=tierBadge(row);
+  $("dName").textContent=row.name||id;$("dName").style.color=tier?tier.color:"var(--text)";
+  const img=$("dIcon"),ph=$("dIconPh");
+  if(!silent){
+    // keep previous body if same id cached; only show loading if empty/error
+    const hasCache=!!itemCache[id];
+    if(!hasCache && (!$("dBody").dataset.itemId || $("dBody").dataset.itemId!==id)){
+      $("dBody").innerHTML=`<div class="empty">Загрузка...</div>`;
+    }
+    img.style.display="none";ph.style.display="flex";ph.textContent=(row.name||"?")[0];
+    img.style.backgroundImage="none";
+    const iconSrc=iconUrl(id);
+    if(iconSrc){
+      const probe=new Image();
+      probe.onload=()=>{if(activeId===id){img.style.backgroundImage=`url("${iconSrc}")`;img.style.display="block";ph.style.display="none"}};
+      probe.onerror=()=>{if(activeId===id){img.style.backgroundImage="none";img.style.display="none";ph.style.display="flex"}};
+      probe.src=iconSrc;
+    }
+  }
+  let favBtn=$("drawerFavBtn");
+  if(!favBtn){
+    favBtn=document.createElement("button");
+    favBtn.id="drawerFavBtn";
+    favBtn.className="drawer-fav";
+    favBtn.title="Избранное";
+    $("closeBtn").parentNode.insertBefore(favBtn,$("closeBtn"));
+  }
+  favBtn.classList.toggle("on",isFav(id));
+  favBtn.textContent=isFav(id)?"★":"☆";
+  favBtn.onclick=()=>toggleFav(id);
+  try{
+    const drawerScrollState=saveScrollState();
+    const j=await(await fetch("/api/item/"+encodeURIComponent(id),{cache:"no-store"})).json();
+    if(!Array.isArray(j.history) && itemCache[id]?.history) j.history=itemCache[id].history;
+    if(!Array.isArray(j.lots) && itemCache[id]?.lots) j.lots=itemCache[id].lots;
+    itemCache[id]=j;
+    if(activeId!==id)return; // stale response
+    $("dBody").dataset.itemId=id;
+    const lots=j.lots||[],history=j.history||[],obs=j.observations||[],st=j.stats||{};
+    const historyTs=(h)=>{
+      const v=h?.ts ?? h?.time ?? h?.sellTime ?? h?.soldAt ?? h?.sold_at ?? h?.createdAt ?? h?.created_at ?? h?.timestamp;
+      if(v==null||v==="")return NaN;
+      if(typeof v==="number" || /^\d+$/.test(String(v).trim())){
+        const n=Number(v);
+        const ms=String(v).trim().length<=10?n*1000:n;
+        const d=new Date(ms);
+        return Number.isFinite(d.getTime())?d.getTime():NaN;
+      }
+      const t=new Date(v).getTime();
+      return Number.isFinite(t)?t:NaN;
+    };
+    const renderSaleChart=(days)=>{
+      const now=Date.now(); const cutoff=days==="all"?0:now-Number(days)*86400000;
+      const filtered=[...history].filter(h=>{const t=historyTs(h);return h.price>0&&Number.isFinite(t)&&(!cutoff||t>=cutoff)}).sort((a,b)=>historyTs(a)-historyTs(b));
+      if(!filtered.length)return `<div class="chart-empty">Нет продаж за выбранный период</div>`;
+      const prices=filtered.map(h=>h.price), mn=Math.min(...prices), mx=Math.max(...prices), range=mx-mn||1;
+      const w=900,h=220,padL=36,padR=16,padT=16,padB=30,plotW=w-padL-padR,plotH=h-padT-padB,maxAmt=Math.max(...filtered.map(x=>x.amount||1),1);
+      const pts=filtered.map((s,i)=>{const x=padL+(i/(filtered.length-1))*plotW;const y=padT+plotH-((s.price-mn)/range)*plotH;return {x,y,s}});
+      const line=pts.map(p=>p.x+","+p.y).join(" ");
+      const bars=pts.map(p=>{const bh=Math.max(2,((p.s.amount||1)/maxAmt)*(plotH*.3));return `<rect x="${p.x-3}" y="${padT+plotH-bh}" width="6" height="${bh}" fill="rgba(167,139,250,.28)"><title>${new Date(historyTs(p.s)).toLocaleString("ru-RU")}\n${fmt(p.s.price)} · ${p.s.amount||1} шт.</title></rect>`}).join("");
+      const dots=pts.map(p=>`<circle cx="${p.x}" cy="${p.y}" r="4" fill="#ff2a2a"><title>${new Date(historyTs(p.s)).toLocaleString("ru-RU")}\n${fmt(p.s.price)} · ${p.s.amount||1} шт.</title></circle>`).join("");
+      return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${bars}<polyline fill="none" stroke="#ff2a2a" stroke-width="2.5" points="${line}"/>${dots}<text x="${padL}" y="${h-8}" fill="#8a8a8a" font-size="11">${fmt(mn)}</text><text x="${w-padR}" y="${h-8}" fill="#8a8a8a" font-size="11" text-anchor="end">${fmt(mx)}</text></svg><div class="sub" style="padding:0 10px 6px">Точки — сделки · столбики — объём · ${filtered.length} продаж</div>`;
+    };
+    const minP=row.min_price??st.curMin;
+    const ref=row.histMedian??st.median7d??st.medianAll??st.salesAvg;
+    const profit=row.profit!=null?row.profit:(minP&&ref?Math.round(ref*0.95-minP):null);
+    const profitPct=row.profitPct!=null?row.profitPct:(minP&&ref&&minP?((ref*0.95-minP)/minP*100):null);
+    const buyTo=ref?Math.round(ref*0.92):null;
+    const sellFast=minP?Math.round(minP*1.03):(ref?Math.round(ref*0.97):null);
+    const sellMarket=ref?Math.round(ref):null;
+    let chart=`<div class="chart-empty">Недостаточно данных</div>`;
+    // Sales chart: chronological, price line + amount bars
+    const salesChrono = [...history].filter(h=>h.price>0&&Number.isFinite(historyTs(h))).sort((a,b)=>historyTs(a)-historyTs(b));
+    if(salesChrono.length>=1){
+      const prices=salesChrono.map(h=>h.price);
+      const amounts=salesChrono.map(h=>h.amount||1);
+      const mn=Math.min(...prices), mx=Math.max(...prices), range=mx-mn||1;
+      const maxAmt=Math.max(...amounts,1);
+      const w=900, h=220, padL=36, padR=16, padT=16, padB=30;
+      const plotW=w-padL-padR, plotH=h-padT-padB;
+      const n=salesChrono.length;
+      let bars="", pts=[], dots="";
+      salesChrono.forEach((s,i)=>{
+        const x=padL+(n===1?plotW/2:(i/(n-1))*plotW);
+        const y=padT+plotH-((s.price-mn)/range)*plotH;
+        const barH=Math.max(2,(s.amount||1)/maxAmt*(plotH*0.35));
+        const st=historyTs(s); const when=Number.isFinite(st)?new Date(st).toLocaleString("ru-RU"):"—";
+        const tip=`${when}\nЦена: ${fmt(s.price)}\nКол-во: ${s.amount||1}`;
+        pts.push(x+","+y);
+        bars+=`<rect x="${x-3}" y="${padT+plotH-barH}" width="6" height="${barH}" fill="rgba(167,139,250,0.3)"><title>${tip}</title></rect>`;
+        // invisible larger hit area + visible dot
+        dots+=`<circle cx="${x}" cy="${y}" r="10" fill="transparent"><title>${tip}</title></circle>`;
+        dots+=`<circle cx="${x}" cy="${y}" r="3.5" fill="#ff2a2a" stroke="#050505" stroke-width="1"><title>${tip}</title></circle>`;
+      });
+      chart=`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:100%">
+        ${bars}
+        <polyline fill="none" stroke="#ff2a2a" stroke-width="2" points="${pts.join(" ")}"/>
+        ${dots}
+        <text x="${padL}" y="${h-6}" fill="#8a8a8a" font-size="9">${fmt(mn)}</text>
+        <text x="${w-padR}" y="${h-6}" fill="#8a8a8a" font-size="9" text-anchor="end">${fmt(mx)}</text>
+      </svg>
+      <div class="sub" style="margin-top:4px">Линия — цена · столбики — количество · наведи на точку</div>`;
+    } else if(obs.length>=2){
+      const chartPrices=obs.map(o=>o.min_price).filter(x=>x>0);
+      if(chartPrices.length>=2){
+        const mn=Math.min(...chartPrices),mx=Math.max(...chartPrices),range=mx-mn||1,w=360,h=110,pad=8;
+        const pts=chartPrices.map((p,i)=>{const x=pad+(i/(chartPrices.length-1))*(w-pad*2);const y=h-pad-((p-mn)/range)*(h-pad*2);return x+","+y}).join(" ");
+        chart=`<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="#ff2a2a" stroke-width="2" points="${pts}"/></svg>`;
+      }
+    }
+    function lotRow(l){
+      const qb=qltBadge(l.qlt,l.ptn);
+      const total=(Number(l.price)||0)*(Number(l.amount)||0);
+      return `<tr data-unit="${Number(l.price)||0}"><td><b>${fmt(total)}</b><div class="sub">за весь лот · ${fmt(l.price)} / шт.</div></td><td>${fmtN(l.amount)}</td>
+        <td>${qb?`<span class="badge-tier ${qb.cls}">${qb.label}</span>`:"—"}</td>
+        <td class="sub">${l.created_at?new Date(l.created_at).toLocaleString("ru-RU"):"—"}</td></tr>`;
+    }
+    function histRow(h){
+      const qb=qltBadge(h.qlt,h.ptn);
+      const total=(Number(h.price)||0)*(Number(h.amount)||0);
+      return `<tr><td><b>${fmt(total)}</b><div class="sub">за весь лот · ${fmt(h.price)} / шт.</div></td><td>${fmtN(h.amount)}</td>
+        <td>${qb?`<span class="badge-tier ${qb.cls}">${qb.label}</span>`:"—"}</td>
+        <td class="sub">${h.ts?new Date(h.ts).toLocaleString("ru-RU"):"—"}</td></tr>`;
+    }
+    // sort lots by unit price ascending (cheapest first)
+    const sortedLots=[...lots].sort((a,b)=>(Number(a.price)||0)-(Number(b.price)||0));
+    let lotsHtml=`<div class="empty" style="padding:16px">Нет лотов</div>`;
+    if(sortedLots.length){
+      lotsHtml=`<div class="lots-filter"><span class="hint">Около</span><input id="lotPriceFilter" type="text" inputmode="decimal" placeholder="/ шт." autocomplete="off"><span class="hint" id="lotFilterHint">все · сначала дешёвые</span><span class="near-hint" id="lotNearHint" style="display:none"></span></div>`;
+      lotsHtml+=`<div class="table-scroll"><table class="mini" id="lotsTable"><thead><tr><th>Цена лота</th><th>Кол-во</th><th>Редкость</th><th>Время</th></tr></thead><tbody>`;
+      lotsHtml+=sortedLots.map(lotRow).join("")+`</tbody></table></div>`;
+    }
+    let histHtml=`<div class="empty" style="padding:16px">Нет продаж</div>`;
+    if(history.length){
+      histHtml=`<div class="table-scroll"><table class="mini" id="histTable"><thead><tr><th>Цена</th><th>Кол-во</th><th>Редкость</th><th>Время</th></tr></thead><tbody>`;
+      histHtml+=history.map(histRow).join("")+`</tbody></table></div>`;
+    }
+    chart=renderSaleChart(7);
+    const ch=v=>v==null?"—":((v>0?"+":"")+Number(v).toFixed(1)+"%");const chC=v=>v==null?"":(v<-3?"g":v>3?"r":"");
+    const srcNote=row.histSource==="last5_sales_qlt"?`медиана последних 5 продаж этой редкости (${row.histCount})`:row.histSource==="min_lot"?`мало продаж — ориентир = мин. лот (без рынка)`:row.histSource==="sales_2d"?`медиана продаж сегодня + вчера (${row.histCount})`:row.histSource==="sales_7d"?`медиана продаж 7д (${row.histCount})`:`${row.histSource||"—"} (${row.histCount||0})`;
+    $("dBody").innerHTML=`
+      <div style="margin-bottom:10px">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""} ${statusBadge(row)}
+        <span class="sub" style="margin-left:8px">${esc(CAT_RU[(row.category||"").split("/")[0]]||row.category||"")}</span></div>
+      <div class="stats-grid">
+        <div class="stat"><div class="lbl">Мин. выкуп</div><div class="val p">${fmt(minP)}</div></div>
+        <div class="stat"><div class="lbl">Рынок</div><div class="val">${fmt(ref)}</div></div>
+        <div class="stat"><div class="lbl">Лотов</div><div class="val">${fmtN(row.lots)}</div></div>
+        <div class="stat"><div class="lbl">Продано / день</div><div class="val">${fmtN(st.soldPerDay)}</div></div>
+        <div class="stat"><div class="lbl">Продажи 2д</div><div class="val">${fmtN(st.recent2dCount)}</div></div>
+        <div class="stat"><div class="lbl">Продажи 7д</div><div class="val">${fmtN(st.sales7d)}</div></div>
+        <div class="stat"><div class="lbl">Медиана 7д</div><div class="val">${fmt(st.median7d)}</div></div>
+        <div class="stat"><div class="lbl">Средняя 7д</div><div class="val">${fmt(st.avg7d)}</div></div>
+      </div>
+      <div class="metric-line"><div class="metric-pill">24ч мин <b>${fmt(st.today?.min)}</b></div><div class="metric-pill">7д мин <b>${fmt(st.d7?.min)}</b></div><div class="metric-pill">30д мин <b>${fmt(st.d30?.min)}</b></div><div class="metric-pill">Все время мин <b>${fmt(st.all?.min)}</b></div><div class="metric-pill">30д сделок <b>${fmtN(st.d30?.count)}</b></div><div class="metric-pill">7д диапазон <b>${fmt(st.min7d)} — ${fmt(st.max7d)}</b></div></div>
+      ${profit!=null?`<div class="stat" style="margin-bottom:12px"><div class="lbl">Потенциал: купить по мин. → продать по ориентиру (после 5%)</div>
+        <div class="val ${profit>=0?"g":"r"}">${profit>=0?"+":""}${fmt(profit)} (${profitPct>=0?"+":""}${Number(profitPct).toFixed(1)}%)</div></div>`:""}
+      <div class="drawer-top">
+        <div>
+          <div class="market-note"><b>${st.enoughSales?"Рыночный ориентир":"Недостаточно продаж для надёжного рынка"}</b> · ${esc(srcNote)}</div>
+          <div class="sell-calc" id="sellCalc">
+            <div class="sell-calc-title">Выставление на аукцион · комиссия 5%</div>
+            <div class="sell-calc-grid">
+              <div><label>Цена за 1 шт.</label><input id="scPrice" type="text" inputmode="decimal" placeholder="Цена"></div>
+              <div><label>Количество</label><input id="scQty" type="text" inputmode="numeric" value="1"></div>
+              <div><label>Комиссия</label><div class="sc-result sc-fee" id="scFee">—</div></div>
+              <div><label>Получишь после комиссии</label><div class="sc-result sc-net" id="scNet">—</div></div>
+            </div>
+            <div class="sub" id="scReverse" style="margin-top:5px">Чтобы получить нужную сумму после комиссии, введи цену за 1 шт.</div>
+          </div>
+        </div>
+        <div class="drawer-tools"><div class="rec"><div class="rec-row"><span>Покупать до</span><b>${fmt(buyTo)}</b></div><div class="rec-row"><span>Быстрая</span><b>${fmt(sellFast)}</b></div><div class="rec-row"><span>По рынку</span><b>${fmt(sellMarket)}</b></div></div><button class="btn-sm" id="addToCalc">+ В калькулятор</button></div>
+      </div>
+      <div><div class="section">График продаж</div><div class="chart-tools" id="chartTools"><button class="chart-tool active" data-days="1">Сегодня</button><button class="chart-tool" data-days="2">Вчера+сегодня</button><button class="chart-tool" data-days="7">7 дней</button><button class="chart-tool" data-days="30">30 дней</button><button class="chart-tool" data-days="all">Всё</button></div><div class="chart-box" id="chartBox">${chart}</div></div>
+      <div class="table-panels">
+        <div class="table-panel"><div class="section">Активные лоты (${sortedLots.length}) · по цене / шт.</div>${lotsHtml}</div>
+        <div class="table-panel"><div class="section">Последние продажи (${history.length})</div>${histHtml}</div>
+      </div>`;
+    document.querySelectorAll("#chartTools .chart-tool").forEach(btn=>btn.onclick=()=>{document.querySelectorAll("#chartTools .chart-tool").forEach(x=>x.classList.remove("active"));btn.classList.add("active");$("chartBox").innerHTML=renderSaleChart(btn.dataset.days)});
+    const scPrice=$("scPrice"),scQty=$("scQty"),scFee=$("scFee"),scNet=$("scNet"),scReverse=$("scReverse");
+    const updateSellCalc=()=>{
+      const price=calcNum(scPrice?.value),qtyRaw=calcNum(scQty?.value),qty=Number.isFinite(qtyRaw)&&qtyRaw>0?qtyRaw:1;
+      if(!Number.isFinite(price)||price<0){if(scFee)scFee.textContent="—";if(scNet)scNet.textContent="—";if(scReverse)scReverse.textContent="Чтобы получить нужную сумму после комиссии, введи цену за 1 шт.";return}
+      const gross=price*qty,fee=gross*.05,net=gross-fee,need=price/.95;
+      if(scFee)scFee.textContent=fmt(fee);
+      if(scNet)scNet.textContent=fmt(net);
+      if(scReverse)scReverse.innerHTML=`Выставление: <b>${fmt(gross)}</b> · после 5%: <b style="color:var(--green)">${fmt(net)}</b> · чтобы получить ${fmt(price)} / шт. чистыми → выставить <b style="color:var(--neon2)">${fmt(need)} / шт.</b>`;
+    };
+    const sellCalcStorageKey="sz_sell_calc_"+String(id);
+    let savedSellCalc=null;
+    try{savedSellCalc=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"null")}catch{}
+    if(scPrice){
+      scPrice.value=savedSellCalc&&Object.prototype.hasOwnProperty.call(savedSellCalc,"price")?String(savedSellCalc.price):(sellMarket!=null?String(Math.round(sellMarket)):"");
+      scPrice.oninput=()=>{
+        scPrice.value=scPrice.value.replace(/[^0-9.,]/g,"");
+        try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.price=scPrice.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}
+        updateSellCalc()
+      };
+      scPrice.onchange=scPrice.onblur=()=>{try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.price=scPrice.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}}
+    }
+    if(scQty){
+      if(savedSellCalc&&Object.prototype.hasOwnProperty.call(savedSellCalc,"qty"))scQty.value=String(savedSellCalc.qty);
+      scQty.oninput=()=>{
+        scQty.value=scQty.value.replace(/[^0-9]/g,"");
+        try{const cur=JSON.parse(localStorage.getItem(sellCalcStorageKey)||"{}");cur.qty=scQty.value;localStorage.setItem(sellCalcStorageKey,JSON.stringify(cur))}catch{}
+        updateSellCalc()
+      };
+    }
+    updateSellCalc();
+    const addBtn=$("addToCalc");
+    if(addBtn)addBtn.onclick=()=>{if(!calcIds.includes(id))calcIds.push(id);saveCalc();showRightTab("calc")};
+    const lotFilter=$("lotPriceFilter");
+    if(lotFilter){
+      const applyLotFilter=()=>{
+        const raw=(lotFilter.value||"").replace(/\s+/g,"").replace(",",".");
+        const t=raw===""?NaN:Number(raw);
+        const rowsEl=[...document.querySelectorAll("#lotsTable tbody tr")];
+        const nearEl=$("lotNearHint"), hintEl=$("lotFilterHint");
+        if(!Number.isFinite(t)){
+          rowsEl.forEach(tr=>tr.style.display="");
+          if(hintEl)hintEl.textContent="все · сначала дешёвые";
+          if(nearEl){nearEl.style.display="none";nearEl.textContent=""}
+          return;
+        }
+        // show lots within ~15% of target, or at least the nearest few
+        const units=rowsEl.map(tr=>({tr,u:Number(tr.dataset.unit)||0}));
+        units.sort((a,b)=>Math.abs(a.u-t)-Math.abs(b.u-t));
+        const tol=Math.max(t*0.15,1);
+        let shown=0;
+        units.forEach(({tr,u},i)=>{
+          const near=Math.abs(u-t)<=tol||i<3;
+          tr.style.display=near?"":"none";
+          if(near)shown++;
+        });
+        if(hintEl)hintEl.textContent=shown+" рядом с "+fmt(t);
+        const best=units[0];
+        if(nearEl&&best){
+          nearEl.style.display="inline";
+          const d=best.u-t;
+          nearEl.textContent=(d===0?"= ":"ближайшая ")+(d>0?"+":"")+fmt(Math.abs(d))+" → "+fmt(best.u);
+        }
+      };
+      lotFilter.oninput=applyLotFilter;
+    }
+    if(itemRefreshTimer)clearInterval(itemRefreshTimer);
+    // Live refresh: update data only — NEVER rebuild drawer body (keeps mobile scroll)
+    itemRefreshTimer=setInterval(async()=>{
+        if(activeId!==id || !$("drawer").classList.contains("open"))return;
+        try{
+          const live=await (await fetch("/api/item/"+encodeURIComponent(id)+"/live",{cache:"no-store"})).json();
+          if(!live?.ok || activeId!==id)return;
+          const rr=rows.find(x=>x.id===id);
+          if(rr){
+            rr.lots=Number(live.lotsCount||0);
+            rr.min_price=live.minPrice??null;
+            rr.minUnitPrice=live.minUnitPrice??live.minPrice??null;
+            rr.minAmount=live.minAmount??null;
+            rr.minTotalPrice=live.minTotalPrice??null;
+            rr.ts=live.ts||rr.ts;
+          }
+          // Patch lots table in place without full re-render if present
+          if(Array.isArray(live.lots) && $("lotsTable")){
+            const tbody=$("lotsTable").querySelector("tbody");
+            if(tbody){
+              const sorted=[...live.lots].sort((a,b)=>(Number(a.price)||0)-(Number(b.price)||0));
+              const scrollEl=tbody.closest(".table-scroll");
+              const st=scrollEl?scrollEl.scrollTop:0;
+              tbody.innerHTML=sorted.map(l=>{
+                const total=(Number(l.price)||0)*(Number(l.amount)||0);
+                const qb=qltBadge(l.qlt,l.ptn);
+                return `<tr data-unit="${Number(l.price)||0}"><td><b>${fmt(total)}</b><div class="sub">за весь лот · ${fmt(l.price)} / шт.</div></td><td>${fmtN(l.amount)}</td>
+                  <td>${qb?`<span class="badge-tier ${qb.cls}">${qb.label}</span>`:"—"}</td>
+                  <td class="sub">${l.created_at||l.created?new Date(l.created_at||l.created).toLocaleString("ru-RU"):"—"}</td></tr>`;
+              }).join("");
+              if(scrollEl) scrollEl.scrollTop=st;
+            }
+          }
+          // Do NOT call renderCards / openItem while drawer is open — prevents jump
+        }catch{}
+      },3000);
+    // Restore drawer body scroll only (not auction list) after first paint
+    requestAnimationFrame(()=>{
+      const db=$("dBody");
+      if(db && drawerScrollState){
+        // keep previous drawer scroll if silent refresh
+        if(silent && window._drawerBodyScroll!=null) db.scrollTop=window._drawerBodyScroll;
+      }
+    });
+  }catch(e){$("dBody").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`}
+}
+function closeDrawer(){
+  if(itemRefreshTimer){clearInterval(itemRefreshTimer);itemRefreshTimer=null;}
+  const db=$("dBody"); if(db) window._drawerBodyScroll=db.scrollTop;
+  activeId=null;
+  $("drawer").classList.remove("open");
+  $("overlay").classList.remove("show");
+  document.body.style.overflow="";
+  // Refresh list only after close
+  renderCards();renderFavs();
+}
+let marketUpdatedAt=null;
+let lastCardsSig="";
+let loadBusy=false;
+function marketSig(list){
+  // Cheap fingerprint: id + min price + lots + status + profit — skip DOM rebuild if unchanged
+  return list.map(r=>`${r.id}|${r.min_price}|${r.lots}|${r.status}|${r.profit}|${r.ts||""}`).join(";");
+}
+async function load(forceFull){
+  if(loadBusy) return;
+  loadBusy=true;
+  try{
+    let j;
+    if(!forceFull && marketUpdatedAt){
+      try{
+        j=await (await fetch("/api/market/delta?since="+encodeURIComponent(marketUpdatedAt),{cache:"no-store"})).json();
+      }catch{ j=null; }
+    }
+    if(!j || j.full || !Array.isArray(j.rows)){
+      j=await (await fetch("/api/market",{cache:"no-store"})).json();
+      rows=j.rows||[];
+    } else {
+      // Merge delta into existing rows by id
+      const map=new Map(rows.map(r=>[r.id,r]));
+      for(const r of (j.rows||[])) map.set(r.id, r);
+      // Drop rows that lost all lots and disappeared from total set is handled by full refresh periodically
+      rows=[...map.values()];
+      // Periodic full resync every ~2 min of delta-only to avoid drift
+      if(!window._lastFullMarket || Date.now()-window._lastFullMarket>120000){
+        window._lastFullMarket=Date.now();
+        const full=await (await fetch("/api/market",{cache:"no-store"})).json();
+        rows=full.rows||rows;
+        j=full;
+      }
+    }
+    if(j.updated) marketUpdatedAt=j.updated;
+    if(!window._lastFullMarket) window._lastFullMarket=Date.now();
+
+    // Client-side guarantee: season pass / proto always in rows
+    (function injectHardPriority(){
+      const need=[
+        {id:"8AjTFOVB",name:"Сезонный Пропуск",category:"other/useful"},
+        {id:"cpe1d8xz",name:"Сезонный Пропуск + 50 уровней",category:"other/useful"},
+        {id:"kJD59qaP",name:"Сезонный Пропуск + 20 уровней",category:"other/useful"},
+        {id:"rdt1m5ve",name:"Протоартефакт",category:"other/useful"},
+      ];
+      const have=new Set(rows.map(r=>r.id));
+      for(const n of need){
+        if(have.has(n.id)){
+          const r=rows.find(x=>x.id===n.id);
+          if(r){ r.priority=true; if(!r.name||r.name===r.id) r.name=n.name; }
+          continue;
+        }
+        rows.push({...n,priority:true,lots:0,min_price:null,status:"no_data",statusLabel:"Нет лотов",dataOk:false});
+      }
+    })();
+
+    const sig=marketSig(rows);
+    const changed=sig!==lastCardsSig;
+    if(changed) lastCardsSig=sig;
+
+    const drawerOpen=$("drawer")?.classList.contains("open");
+    // Background poll: only touch auction/favs — never rebuild calc/pod/deals/catalog chips
+    if((changed || forceFull) && !drawerOpen){
+      if(forceFull){
+        renderCatChips();
+        renderTplBar();
+      }
+      // Incremental patch; defers if user is typing/scrolling
+      renderCards({fromPoll: !forceFull, forceFull: !!forceFull, noAnim: false});
+      // Fav strip: light update only when not busy
+      if(!isUserBusy()){
+        renderFavs();
+        if(($("huntQ")?.value||"").trim()) renderHunt();
+      }
+      // Catalog prices only if catalog visible and idle
+      if(forceFull && rightTab==="catalog" && !isUserBusy()) renderCatalog();
+    } else if(changed && drawerOpen){
+      lastCardsSig=sig;
+    }
+    // Fav live: interval handles it; on force scan still nudge once
+    if(!drawerOpen && forceFull) refreshFavoriteLots(true);
+  }catch(e){
+    if(!$("cards").querySelector(".pcard"))
+      $("cards").innerHTML=`<div class="empty">Ошибка: ${esc(e.message)}</div>`;
+  }finally{ loadBusy=false; }
+}
+async function updateStatus(){try{const j=await(await fetch("/api/status")).json();$("st").textContent=j.scanning?"сканирование…":"готово";$("last").textContent=j.lastScan?new Date(j.lastScan).toLocaleTimeString("ru-RU"):"—";$("cnt").textContent=j.itemCount||0;$("lotCnt").textContent=j.lotItems||0}catch{}}
+// search input bound below with markUserBusy
+$("huntQ").oninput=renderHunt;$("huntPrice").oninput=renderHunt;
+$("catQ").oninput=()=>{catFilter=$("catQ").value;renderCatalog()};
+$("catBack").onclick=()=>showCatList();
+$("closeBtn").onclick=closeDrawer;$("overlay").onclick=closeDrawer;
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("drawer").classList.contains("open"))closeDrawer()});
+$("calcBuyMode").onclick=()=>switchCalcMode("buy");
+$("calcSellMode").onclick=()=>switchCalcMode("sell");
+$("calcTotalSellMode").onclick=()=>switchCalcMode("totalSell");
+$("podAddRow")?.addEventListener("click",()=>podAddRow());
+$("podClearQty")?.addEventListener("click",()=>{
+  for(const r of podRows) r.qty="";
+  savePod(); renderPod({skipFocus:true});
+});
+$("podClearAll")?.addEventListener("click",()=>{
+  if(!podRows.length) return;
+  if(!confirm("Удалить все строки подсчёта?")) return;
+  podRows=[]; savePod(); renderPod({skipFocus:true});
+});
+$("podSum")?.addEventListener("click",()=>{
+  const n=Number($("podSum").dataset.raw);
+  if(!Number.isFinite(n)) return;
+  copyPlainNumber(n, $("podSum"));
+  savePodHistoryFromSum();
+});
+$("podHistBtn")?.addEventListener("click",()=>{
+  const panel=$("podHistPanel");
+  if(!panel) return;
+  const open=panel.style.display==="none"||!panel.style.display;
+  panel.style.display=open?"block":"none";
+  if(open) renderPodHist();
+});
+$("podHistClear")?.addEventListener("click",()=>{
+  if(!podHist.length) return;
+  if(!confirm("Очистить историю подсчётов?")) return;
+  podHist=[]; savePodHist(); renderPodHist();
+});
+$("dealQ")?.addEventListener("input", updateDealSuggest);
+$("dealBuy")?.addEventListener("input", updateDealPreview);
+$("dealSell")?.addEventListener("input", updateDealPreview);
+$("dealAddBtn")?.addEventListener("click", addDealFromForm);
+$("dealCustomToggle")?.addEventListener("click",()=>setDealCustomOpen($("dealCustomBox")?.style.display==="none"||!$("dealCustomBox")?.style.display));
+$("dealCustomCancel")?.addEventListener("click",()=>setDealCustomOpen(false));
+$("dealCustomAddBtn")?.addEventListener("click", addCustomDealFromForm);
+$("dealCustomBuy")?.addEventListener("input", updateDealCustomPreview);
+$("dealCustomSell")?.addEventListener("input", updateDealCustomPreview);
+$("dealFilterAll")?.addEventListener("click",()=>{ dealFilter="all"; renderDeals(); });
+$("dealFilterToday")?.addEventListener("click",()=>{ dealFilter="today"; renderDeals(); });
+$("dealFilterPlus")?.addEventListener("click",()=>{ dealFilter="plus"; renderDeals(); });
+$("dealFilterMinus")?.addEventListener("click",()=>{ dealFilter="minus"; renderDeals(); });
+$("dealClearAll")?.addEventListener("click",()=>{
+  if(!dealsList.length) return;
+  if(!confirm("Удалить всю историю сделок?")) return;
+  dealsList=[]; saveDeals(); renderDeals();
+});
+$("dealTotal")?.addEventListener("click",()=>{
+  const n=Number($("dealTotal").dataset.raw);
+  if(Number.isFinite(n)) copyPlainNumber(n, $("dealTotal"));
+});
+document.addEventListener("click",e=>{
+  if(!e.target.closest(".calc-search")){
+    $("dealSuggest")?.classList.remove("open");
+  }
+  if(!e.target.closest(".pod-color-wrap")){
+    document.querySelectorAll(".pod-color-pop").forEach(p=>p.style.display="none");
+  }
+});
+$("calcQ").oninput=updateCalcSuggest;
+$("calcQ").onfocus=updateCalcSuggest;
+document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
+document.querySelectorAll(".chips .chip").forEach(c=>{
+  c.onclick=()=>{
+    if(c.dataset.s==="profit"){sortBy=sortBy==="profit"?"new":"profit";c.classList.toggle("active",sortBy==="profit");renderCards();return}
+    document.querySelectorAll(".chips .chip[data-f]").forEach(x=>x.classList.remove("active"));
+    c.classList.add("active");filter=c.dataset.f;renderCards();
+  };
+});
+document.querySelectorAll("#mainTabs .tab").forEach(t=>{
+  t.onclick=()=>showRightTab(t.dataset.tab);
+});
+$("scanBtn").onclick=async()=>{$("scanBtn").disabled=true;try{await fetch("/api/scan",{method:"POST"})}catch{}setTimeout(()=>{load(true);$("scanBtn").disabled=false},1200)};
+fetch("/icons/categories.json").then(r=>r.json()).then(j=>{catIcons=j||{}}).catch(()=>{});
+
+
+const filtersToggle=$("filtersToggle");
+if(filtersToggle){
+  filtersToggle.onclick=()=>{
+    const pane=filtersToggle.closest(".pane");
+    if(!pane)return;
+    const open=pane.classList.toggle("filters-open");
+    filtersToggle.classList.toggle("on", open);
+    filtersToggle.textContent=open?"Скрыть фильтры":"Фильтры";
+  };
+}
+
+/* Mobile navigation: auction full page, catalog/calc via sheet */
+function isMobile(){return window.matchMedia("(max-width:800px)").matches}
+function closeMobileNav(){
+  const sheet=$("mobileNavSheet");
+  if(sheet){sheet.classList.remove("open");sheet.hidden=true}
+  document.body.classList.remove("mobile-nav-open");
+}
+function openMobileNav(){
+  const sheet=$("mobileNavSheet");
+  if(!sheet)return;
+  sheet.hidden=false;
+  requestAnimationFrame(()=>sheet.classList.add("open"));
+  document.body.classList.add("mobile-nav-open");
+}
+function setMobileView(tab){
+  const main=document.querySelector(".main");
+  if(!main)return;
+  if(!isMobile()){
+    main.classList.remove("mobile-right");
+    return;
+  }
+  if(tab==="auction"){
+    main.classList.remove("mobile-right");
+  }else{
+    main.classList.add("mobile-right");
+    showRightTab(tab==="catalog"||tab==="calc"||tab==="perekup"||tab==="deals"?tab:"catalog");
+  }
+  document.querySelectorAll(".mobile-nav-item").forEach(b=>{
+    b.classList.toggle("active", b.dataset.mobileTab===tab);
+  });
+  closeMobileNav();
+}
+function toggleMobileNav(){
+  const sheet=$("mobileNavSheet");
+  if(sheet && !sheet.hidden && sheet.classList.contains("open")) closeMobileNav();
+  else openMobileNav();
+}
+const _mNavBtn=$("mobileNavBtn");
+if(_mNavBtn)_mNavBtn.onclick=toggleMobileNav;
+const _mNavBtn2=$("mobileNavBtn2");
+if(_mNavBtn2)_mNavBtn2.onclick=toggleMobileNav;
+const _mBack=$("mobileBackAuction");
+if(_mBack)_mBack.onclick=()=>setMobileView("auction");
+const _mNavClose=$("mobileNavClose");
+if(_mNavClose)_mNavClose.onclick=closeMobileNav;
+document.querySelectorAll(".mobile-nav-item").forEach(btn=>{
+  btn.onclick=()=>setMobileView(btn.dataset.mobileTab);
+});
+document.addEventListener("click",e=>{
+  if(!isMobile())return;
+  if(document.body.classList.contains("mobile-nav-open")
+    && !e.target.closest("#mobileNavSheet")
+    && !e.target.closest("#mobileNavBtn")
+    && !e.target.closest("#mobileNavBtn2")){
+    closeMobileNav();
+  }
+});
+window.addEventListener("resize",()=>{
+  if(!isMobile()){
+    document.querySelector(".main")?.classList.remove("mobile-right");
+    closeMobileNav();
+  }
+});
+
+
+load(true);updateStatus();
+// SSE: сервер пушит после скана — клиент подтягивает дельту
+connectSSE({
+  onMarket: () => { load(false); },
+  onStatus: (st) => {
+    try {
+      if (st.scanning != null) $("st").textContent = st.scanning ? "сканирование…" : "готово";
+      if (st.lastScan) $("last").textContent = new Date(st.lastScan).toLocaleTimeString("ru-RU");
+      if (st.itemCount != null) $("cnt").textContent = st.itemCount;
+      if (st.lotItems != null) $("lotCnt").textContent = st.lotItems;
+    } catch {}
+  },
+});
+// Редкий fallback, если SSE отвалился
+setInterval(() => load(false), 15000);
+setInterval(() => {
+  if ($("drawer")?.classList.contains("open")) return;
+  if (typeof isUserBusy === "function" && isUserBusy()) return;
+  refreshFavoriteLots();
+}, 4000);
+setInterval(updateStatus, 10000);
+setInterval(flushPendingAuction, 250);
+// Mark interaction so background polls don't freeze typing/scroll
+document.addEventListener("pointerdown",()=>markUserBusy(600),{passive:true});
+document.addEventListener("touchstart",()=>markUserBusy(700),{passive:true});
+document.addEventListener("keydown",()=>markUserBusy(900),{passive:true});
+document.addEventListener("scroll",e=>{
+  const t=e.target;
+  if(t && (t.id==="dBody" || t.classList?.contains("drawer-body"))) window._drawerBodyScroll=t.scrollTop;
+  markUserBusy(500);
+},true);
+const _qEl=$("q");
+if(_qEl){
+  _qEl.addEventListener("input",()=>{ markUserBusy(1000); renderCards({noAnim:true, forceFull:true}); });
+}
