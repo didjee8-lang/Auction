@@ -449,3 +449,17 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 }
 .pcard.pcard-patch{transition:border-color .2s,box-shadow .2s}
 
+
+.pcard-deal{width:100%;margin-top:4px;padding-top:4px;border-top:1px solid var(--border);font-size:9px}
+.pcard-deal-row{display:flex;justify-content:space-between;gap:4px;color:var(--muted);margin:1px 0}
+.pcard-deal-row b{color:var(--text);font-weight:600}
+.pcard-deal-note{color:var(--muted);margin-top:3px;line-height:1.25}
+.conf{display:inline-block;margin-top:3px;font-size:9px;font-weight:600}
+.conf-high{color:var(--green)}
+.conf-mid{color:var(--yellow)}
+.conf-low{color:var(--red)}
+.pcard.pcard-enter{
+  opacity:0;
+  transform:translateY(8px) scale(.97);
+  animation:pcardIn .32s cubic-bezier(.22,.61,.36,1) forwards;
+}

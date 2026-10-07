@@ -22,33 +22,150 @@ let apiFailStreak = 0;
 let currentPollMs = POLL_MS; // adaptive
 const liveBusy = new Set(); // item ids currently being live-fetched by UI
 
-/** Market ref: median of last 5 sales of the same rarity (qlt). No fallback to lots/all-time.
- *  If fewer than 5 sales → no market (ref = min lot, dataOk=false, no "cheap/expensive"). */
+/** Auction fee (known game rule, used across calc/deals UI). */
+const AUCTION_FEE = 0.05;
+
+/**
+ * Robust market estimate from real sales.
+ * - Matches rarity (qlt) and sharpening (ptn) when provided (critical for artefacts)
+ * - Prefers fresh sales (24h → 72h → 7d → older)
+ * - Drops outliers via IQR
+ * - Uses median of cleaned sample (never a single max sale)
+ */
 function marketRefFromLast5Sales(itemId, qlt, ptn){
-  let saleGroup=[];
-  try {
-    if(qlt!=null){
-      saleGroup=DB.prepare(`
-        SELECT price, amount, ts FROM sale_observations
-        WHERE item_id=? AND price>0
-          AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
-        ORDER BY datetime(ts) DESC LIMIT 5
-      `).all(itemId, qlt, qlt);
-    } else {
-      saleGroup=DB.prepare(`
-        SELECT price, amount, ts FROM sale_observations
-        WHERE item_id=? AND price>0
-        ORDER BY datetime(ts) DESC LIMIT 5
-      `).all(itemId);
-    }
-  } catch { saleGroup=[]; }
-  // Use unit prices of last 5 sale events (not weighted by amount — each deal counts once)
-  const prices=saleGroup.map(s=>Number(s.price)).filter(p=>p>0);
-  if(prices.length>=5){
-    return { ref: medianOf(prices), refSource: "last5_sales_qlt", refCount: prices.length, dataOk: true };
-  }
-  return { ref: null, refSource: "none", refCount: prices.length, dataOk: false };
+  return estimateMarketDeal(itemId, qlt, ptn);
 }
+
+function estimateMarketDeal(itemId, qlt, ptn){
+  let saleGroup = [];
+  try {
+    // Pull a wider window; filter quality in JS for correct NULL matching
+    saleGroup = DB.prepare(`
+      SELECT price, amount, ts, qlt, ptn FROM sale_observations
+      WHERE item_id=? AND price>0
+      ORDER BY datetime(ts) DESC LIMIT 80
+    `).all(itemId);
+  } catch { saleGroup = []; }
+
+  // Strict match: same rarity; if ptn known on the lot, require same ptn (artefacts)
+  saleGroup = saleGroup.filter(s => {
+    const sq = s.qlt != null ? Number(s.qlt) : null;
+    const sp = s.ptn != null ? Number(s.ptn) : null;
+    if (qlt != null) {
+      if (sq !== Number(qlt)) return false;
+    }
+    if (ptn != null && Number(ptn) > 0) {
+      // sharpening present on buy lot → only compare same +N
+      if (sp !== Number(ptn)) return false;
+    }
+    return Number(s.price) > 0;
+  });
+
+  const now = Date.now();
+  const withTs = saleGroup.map(s => {
+    const t = s.ts ? new Date(s.ts).getTime() : NaN;
+    return { price: Number(s.price), ts: Number.isFinite(t) ? t : 0, ageH: Number.isFinite(t) ? (now - t) / 3600000 : 9999 };
+  }).filter(s => s.price > 0);
+
+  // Prefer fresher windows
+  function pickWindow(maxAgeH, minNeed) {
+    const w = withTs.filter(s => s.ageH <= maxAgeH);
+    return w.length >= minNeed ? w : null;
+  }
+  let sample = pickWindow(24, 3) || pickWindow(72, 3) || pickWindow(24 * 7, 4) || (withTs.length ? withTs.slice(0, 20) : []);
+  if (!sample.length) {
+    return {
+      ref: null, refSource: "none", refCount: 0, dataOk: false,
+      confidence: "none", confidenceLabel: "Нет данных",
+      saleMin: null, saleMax: null, saleMedian: null, saleAvg: null,
+      windowHours: null, outlierDropped: 0, feeRate: AUCTION_FEE,
+    };
+  }
+
+  // Cap to 25 most recent in chosen window
+  sample = sample.slice(0, 25);
+  const rawPrices = sample.map(s => s.price).sort((a, b) => a - b);
+
+  // IQR outlier filter (need ≥5 points)
+  let cleaned = rawPrices;
+  let outlierDropped = 0;
+  if (rawPrices.length >= 5) {
+    const q1 = rawPrices[Math.floor((rawPrices.length - 1) * 0.25)];
+    const q3 = rawPrices[Math.floor((rawPrices.length - 1) * 0.75)];
+    const iqr = Math.max(0, q3 - q1);
+    const lo = q1 - 1.5 * iqr;
+    const hi = q3 + 1.5 * iqr;
+    const filtered = rawPrices.filter(p => p >= lo && p <= hi);
+    if (filtered.length >= 3) {
+      outlierDropped = rawPrices.length - filtered.length;
+      cleaned = filtered;
+    }
+  }
+
+  const ref = medianOf(cleaned);
+  const saleMin = cleaned[0];
+  const saleMax = cleaned[cleaned.length - 1];
+  const saleAvg = avgOf(cleaned);
+  const maxAge = Math.max(...sample.map(s => s.ageH));
+  const windowHours = Math.ceil(maxAge);
+  const n = cleaned.length;
+
+  // Spread relative to median
+  const spread = ref > 0 && saleMax != null && saleMin != null
+    ? (saleMax - saleMin) / ref
+    : 1;
+
+  // Confidence: count + freshness + low spread
+  const freshCount = sample.filter(s => s.ageH <= 24).length;
+  let confidence = "low";
+  let confidenceLabel = "Низкая уверенность";
+  if (n >= 8 && freshCount >= 4 && spread <= 0.35) {
+    confidence = "high";
+    confidenceLabel = "Высокая уверенность";
+  } else if (n >= 5 && (freshCount >= 2 || maxAge <= 72) && spread <= 0.55) {
+    confidence = "mid";
+    confidenceLabel = "Средняя уверенность";
+  } else if (n >= 3) {
+    confidence = "low";
+    confidenceLabel = "Низкая уверенность";
+  } else {
+    confidence = "low";
+    confidenceLabel = "Мало продаж";
+  }
+
+  // dataOk: enough points after cleaning for a stable median
+  const dataOk = n >= 3 && ref != null && ref > 0;
+
+  let refSource = "sales_median";
+  if (maxAge <= 24) refSource = "sales_24h_median";
+  else if (maxAge <= 72) refSource = "sales_72h_median";
+  else if (maxAge <= 24 * 7) refSource = "sales_7d_median";
+  else refSource = "sales_older_median";
+
+  return {
+    ref,
+    refSource,
+    refCount: n,
+    dataOk,
+    confidence,
+    confidenceLabel,
+    saleMin,
+    saleMax,
+    saleMedian: ref,
+    saleAvg,
+    windowHours,
+    outlierDropped,
+    feeRate: AUCTION_FEE,
+    freshCount,
+  };
+}
+
+/** Net proceeds after auction fee when selling at expected price */
+function netAfterFee(gross, feeRate = AUCTION_FEE) {
+  if (gross == null || !(gross > 0)) return null;
+  return Math.round(gross * (1 - feeRate));
+}
+
 
 let marketCache = { at: 0, rows: null, updated: null };
 const MARKET_CACHE_MS = 2500;
@@ -641,27 +758,26 @@ function buildMarketRow(x){
   const minPtn=minLot?.ptn??null;
   const lotAvg=lotPrices.length?avgOf(lotPrices):(o?.avg_price??null);
 
-  // Strict: median of last 5 sales same rarity; else no market (ref = min lot for display only)
-  const mr=marketRefFromLast5Sales(x.id, minQlt, minPtn);
+  // Robust estimate from recent sales (rarity + sharpening aware)
+  const mr=estimateMarketDeal(x.id, minQlt, minPtn);
   let ref=mr.ref, refSource=mr.refSource, refCount=mr.refCount, dataOk=mr.dataOk;
   if(!dataOk && minP!=null){
-    // No reliable market → orient on min lot itself (profit ~ 0 after fee context)
     ref=minP;
     refSource="min_lot";
     refCount=0;
   }
 
+  const expectedNet = (dataOk && mr.ref!=null) ? netAfterFee(mr.ref, mr.feeRate) : null;
+  const profit = (minP!=null && expectedNet!=null) ? Math.round(expectedNet - minP) : null;
+  const profitPct = (minP && expectedNet!=null && minP>0) ? Math.round(((expectedNet - minP)/minP)*1000)/10 : null;
+
   let status="no_data", statusLabel="Мало данных";
-  if(minP && dataOk && mr.ref){
-    const ratio=minP/mr.ref;
-    if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
-    else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
+  if(minP && dataOk && expectedNet!=null){
+    const ratio = minP / mr.ref;
+    if(profit!=null && profit>0 && ratio<=0.95){ status="cheap"; statusLabel="Выгодно"; }
+    else if(ratio>=1.08){ status="expensive"; statusLabel="Дорого"; }
     else { status="normal"; statusLabel="Обычная"; }
   } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
-
-  // Profit only when we have real last-5 median
-  const profit=(minP!=null && dataOk && mr.ref!=null)?Math.round(mr.ref*0.95 - minP):null;
-  const profitPct=(minP && dataOk && mr.ref && minP>0)?Math.round(((mr.ref*0.95 - minP)/minP)*1000)/10:null;
   const lastSaleRow=DB.prepare("SELECT price,ts,qlt,ptn FROM sale_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1").get(x.id);
   const lastSale=lastSaleRow?.price??null;
   const changeVsLast=(minP&&lastSale)?Math.round(((minP-lastSale)/lastSale)*1000)/10:null;
@@ -684,6 +800,20 @@ function buildMarketRow(x){
     histSource:refSource,
     histCount:refCount,
     dataOk,
+    confidence: mr.confidence || "none",
+    confidenceLabel: mr.confidenceLabel || null,
+    expectedSale: dataOk ? mr.ref : null,
+    expectedNet: expectedNet,
+    feeRate: mr.feeRate ?? AUCTION_FEE,
+    feeAmount: (dataOk && mr.ref!=null) ? Math.round(mr.ref * (mr.feeRate ?? AUCTION_FEE)) : null,
+    saleMin: mr.saleMin ?? null,
+    saleMax: mr.saleMax ?? null,
+    saleAvg: mr.saleAvg ?? null,
+    windowHours: mr.windowHours ?? null,
+    outlierDropped: mr.outlierDropped ?? 0,
+    dealNote: dataOk
+      ? (`На основе ${refCount} продаж` + (mr.windowHours!=null ? ` за ~${mr.windowHours}ч` : "") + (mr.outlierDropped ? ` (−${mr.outlierDropped} выброс.)` : ""))
+      : (minP!=null ? "Мало продаж — без прогноза прибыли" : null),
     avgAll:sa.avgAll,
     avg7d:sa.avg7d,
     avgToday:sa.avgToday,
@@ -720,8 +850,8 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
   const lotPrices=fakeLots.map(l=>l.price).filter(p=>p>0);
   const lotAvg=lotPrices.length?avgOf(lotPrices):null;
 
-  // Strict: median of last 5 sales of THIS rarity only
-  const mr=marketRefFromLast5Sales(baseItem.id, qlt, minPtn);
+  // Same robust estimate, locked to this rarity (qlt) + sharpening
+  const mr=estimateMarketDeal(baseItem.id, qlt, minPtn);
   let ref=mr.ref, refSource=mr.refSource, refCount=mr.refCount, dataOk=mr.dataOk;
   if(!dataOk && minP!=null){
     ref=minP;
@@ -729,16 +859,17 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     refCount=0;
   }
 
+  const expectedNet = (dataOk && mr.ref!=null) ? netAfterFee(mr.ref, mr.feeRate) : null;
+  const profit = (minP!=null && expectedNet!=null) ? Math.round(expectedNet - minP) : null;
+  const profitPct = (minP && expectedNet!=null && minP>0) ? Math.round(((expectedNet - minP)/minP)*1000)/10 : null;
+
   let status="no_data", statusLabel="Мало данных";
-  if(minP && dataOk && mr.ref){
-    const ratio=minP/mr.ref;
-    if(ratio<=0.92){ status="cheap"; statusLabel="Ниже рынка"; }
-    else if(ratio>=1.10){ status="expensive"; statusLabel="Выше рынка"; }
+  if(minP && dataOk && expectedNet!=null){
+    const ratio = minP / mr.ref;
+    if(profit!=null && profit>0 && ratio<=0.95){ status="cheap"; statusLabel="Выгодно"; }
+    else if(ratio>=1.08){ status="expensive"; statusLabel="Дорого"; }
     else { status="normal"; statusLabel="Обычная"; }
   } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
-
-  const profit=(minP!=null && dataOk && mr.ref!=null)?Math.round(mr.ref*0.95 - minP):null;
-  const profitPct=(minP && dataOk && mr.ref && minP>0)?Math.round(((mr.ref*0.95 - minP)/minP)*1000)/10:null;
   const lastSaleRow=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY ts DESC LIMIT 1").get(baseItem.id, qlt, qlt);
   const lastSale=lastSaleRow?.price??null;
   const sa=salesAverages(baseItem.id);
@@ -769,6 +900,20 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     histSource: refSource,
     histCount: refCount,
     dataOk,
+    confidence: mr.confidence || "none",
+    confidenceLabel: mr.confidenceLabel || null,
+    expectedSale: dataOk ? mr.ref : null,
+    expectedNet: expectedNet,
+    feeRate: mr.feeRate ?? AUCTION_FEE,
+    feeAmount: (dataOk && mr.ref!=null) ? Math.round(mr.ref * (mr.feeRate ?? AUCTION_FEE)) : null,
+    saleMin: mr.saleMin ?? null,
+    saleMax: mr.saleMax ?? null,
+    saleAvg: mr.saleAvg ?? null,
+    windowHours: mr.windowHours ?? null,
+    outlierDropped: mr.outlierDropped ?? 0,
+    dealNote: dataOk
+      ? (`На основе ${refCount} продаж` + (mr.windowHours!=null ? ` за ~${mr.windowHours}ч` : "") + (mr.outlierDropped ? ` (−${mr.outlierDropped} выброс.)` : ""))
+      : (minP!=null ? "Мало продаж — без прогноза прибыли" : null),
     avgAll: sa.avgAll, avg7d: sa.avg7d, avgToday: sa.avgToday, avgYesterday: sa.avgYesterday,
     salesCount: sa.salesCount, sales7d: sa.sales7d, salesToday: sa.salesToday, salesYesterday: sa.salesYesterday,
     soldPerDay: sa.sales7d!=null ? Math.round((sa.sales7d/7)*10)/10 : 0,

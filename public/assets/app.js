@@ -6,7 +6,7 @@ let catViewState=(()=>{ try{ return JSON.parse(localStorage.getItem("sz_cat_view
 if(!catViewState || typeof catViewState!=="object") catViewState={};
 function saveCatView(){ try{ localStorage.setItem("sz_cat_view", JSON.stringify(catViewState)); }catch{} }
 function getCatState(cat){
-  if(!catViewState[cat]) catViewState[cat]={sub:"", rarity:"", ptn:"", q:"", sort:"name"};
+  if(!catViewState[cat]) catViewState[cat]={sub:"", rarity:"", qlt:"", ptn:"", q:"", sort:"name"};
   return catViewState[cat];
 }
 
@@ -502,11 +502,34 @@ function tierBadge(row){
   return null;
 }
 function statusBadge(row){
-  if(row.status==="cheap")return`<span class="badge g">Ниже рынка</span>`;
-  if(row.status==="expensive")return`<span class="badge r">Выше рынка</span>`;
-  if(row.status==="normal")return`<span class="badge y">Обычная</span>`;
+  if(row.status==="cheap")return`<span class="badge g">${esc(row.statusLabel||"Выгодно")}</span>`;
+  if(row.status==="expensive")return`<span class="badge r">${esc(row.statusLabel||"Дорого")}</span>`;
+  if(row.status==="normal")return`<span class="badge y">${esc(row.statusLabel||"Обычная")}</span>`;
   if(row.lots>0)return`<span class="badge p">В продаже</span>`;
   return`<span class="badge m">Нет лотов</span>`;
+}
+function confidenceBadge(row){
+  if(!row || !row.dataOk) return "";
+  const c=row.confidence||"";
+  if(c==="high") return `<span class="conf conf-high" title="${esc(row.confidenceLabel||"")}">● высокая</span>`;
+  if(c==="mid") return `<span class="conf conf-mid" title="${esc(row.confidenceLabel||"")}">● средняя</span>`;
+  if(c==="low") return `<span class="conf conf-low" title="${esc(row.confidenceLabel||"")}">● низкая</span>`;
+  return "";
+}
+function dealBreakdownHtml(r){
+  if(r.profit==null || !r.dataOk) return "";
+  const buy=r.minUnitPrice??r.min_price;
+  const sale=r.expectedSale??r.histMedian;
+  const net=r.expectedNet;
+  const fee=r.feeAmount;
+  return `<div class="pcard-deal">
+    <div class="pcard-deal-row"><span>Покупка</span><b>${fmt(buy)}</b></div>
+    <div class="pcard-deal-row"><span>Ожид. продажа</span><b>${fmt(sale)}</b></div>
+    ${fee!=null?`<div class="pcard-deal-row"><span>Комиссия 5%</span><b class="sub">${fmt(fee)}</b></div>`:""}
+    <div class="pcard-deal-row"><span>Чистыми</span><b>${fmt(net)}</b></div>
+    ${r.dealNote?`<div class="pcard-deal-note">${esc(r.dealNote)}</div>`:""}
+    ${confidenceBadge(r)}
+  </div>`;
 }
 function baseItemId(id){return String(id||"").replace(/@q\d+$/,"")}
 function iconUrl(id){const b=baseItemId(id);return b?`/api/icon/${encodeURIComponent(b)}`:""}
@@ -533,13 +556,15 @@ function isUserBusy(){
   return false;
 }
 function cardSig(r){
-  return [r.min_price,r.minUnitPrice,r.lots,r.status,r.profit,r.profitPct,r.lastSale,isFav(r.id)?1:0,r.id===activeId?1:0].join("|");
+  return [r.min_price,r.minUnitPrice,r.lots,r.status,r.profit,r.profitPct,r.confidence,r.expectedNet,r.lastSale,isFav(r.id)?1:0,r.id===activeId?1:0].join("|");
 }
 function cardHtml(r){
   const tier=tierBadge(r);
   const hasLots=(r.lots||0)>0;
   const cls=["pcard",r.id===activeId?"active":"",r.status==="cheap"?"cheap":"",r.status==="expensive"?"expensive":""].filter(Boolean).join(" ");
-  const profitLine=r.profit!=null?`<div class="pcard-profit ${r.profit>=0?"pos":"neg"}">${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)</div>`:"";
+  const profitLine=r.profit!=null
+    ? `<div class="pcard-profit ${r.profit>=0?"pos":"neg"}">${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)</div>${dealBreakdownHtml(r)}`
+    : "";
   const favOn=isFav(r.id);
   const priceTxt=hasLots
     ? `${r.minUnitPrice!=null?fmt(r.minUnitPrice):fmt(r.min_price)} <span style="font-size:10px;color:var(--muted)">/ шт.</span>`
@@ -602,6 +627,7 @@ function patchCardEl(el, r){
   const qtyEl=el.querySelector(".pcard-qty");
   if(qtyEl) qtyEl.innerHTML=`<b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b>`;
   let profitEl=el.querySelector(".pcard-profit");
+  let dealEl=el.querySelector(".pcard-deal");
   if(r.profit!=null){
     const html=`${r.profit>=0?"+":""}${fmt(r.profit)} (${r.profitPct>=0?"+":""}${r.profitPct}%)`;
     if(!profitEl){
@@ -612,8 +638,22 @@ function patchCardEl(el, r){
     }
     profitEl.className=`pcard-profit ${r.profit>=0?"pos":"neg"}`;
     profitEl.textContent=html;
-  } else if(profitEl){
-    profitEl.remove();
+    if(!dealEl){
+      const wrap=document.createElement("div");
+      wrap.innerHTML=dealBreakdownHtml(r);
+      dealEl=wrap.firstElementChild;
+      if(dealEl){
+        const st=el.querySelector(".pcard-status");
+        if(st) el.insertBefore(dealEl, st); else el.appendChild(dealEl);
+      }
+    } else {
+      const wrap=document.createElement("div");
+      wrap.innerHTML=dealBreakdownHtml(r);
+      if(wrap.firstElementChild) dealEl.replaceWith(wrap.firstElementChild);
+    }
+  } else {
+    if(profitEl) profitEl.remove();
+    if(dealEl) dealEl.remove();
   }
   const stEl=el.querySelector(".pcard-status");
   if(stEl) stEl.innerHTML=statusBadge(r)||"";
@@ -729,8 +769,8 @@ function paintAuctionList(list, mode, opts){
   }
   const frag=document.createDocumentFragment();
   let newCount=0;
-  const maxStagger=8;
-  const staggerMs=40;
+  const maxStagger=6;
+  const staggerMs=55;
 
   list.forEach((r)=>{
     let el=existingMap.get(r.id);
@@ -793,14 +833,17 @@ function itemSubCat(r){
 }
 function collectCatMeta(cat){
   const base=rows.filter(r=>(r.category||"other").split("/")[0]===cat);
-  const subs=new Map(); // sub -> count
+  const subs=new Map();
   const rarities=new Set();
+  const qlts=new Set();
   const ptns=new Set();
   for(const r of base){
     const sub=itemSubCat(r);
     if(sub) subs.set(sub, (subs.get(sub)||0)+1);
     const col=String(r.rarity||r.color||"").toUpperCase();
-    if(col) rarities.add(col);
+    if(col && col!=="DEFAULT") rarities.add(col);
+    if(r.minQlt!=null && Number.isFinite(Number(r.minQlt))) qlts.add(Number(r.minQlt));
+    if(r.variantQlt!=null && Number.isFinite(Number(r.variantQlt))) qlts.add(Number(r.variantQlt));
     if(r.minPtn!=null && Number.isFinite(Number(r.minPtn))) ptns.add(Number(r.minPtn));
     if(r.ptn!=null && Number.isFinite(Number(r.ptn))) ptns.add(Number(r.ptn));
   }
@@ -808,6 +851,7 @@ function collectCatMeta(cat){
     base,
     subs:[...subs.entries()].sort((a,b)=>a[0].localeCompare(b[0],"ru")),
     rarities:[...rarities].sort((a,b)=>a.localeCompare(b)),
+    qlts:[...qlts].sort((a,b)=>a-b),
     ptns:[...ptns].sort((a,b)=>a-b)
   };
 }
@@ -822,6 +866,7 @@ function renderCatFilters(cat){
   const isArmor=cat==="armor"||cat==="armour";
   const showSub=meta.subs.length>=1 && (isArt||isMod||isOther||isCons||isArmor||cat==="weapon"||cat==="weapon_style"||cat==="armor_style");
   const showRarity=meta.rarities.length>=1 && (isArt||isMod||isArmor||cat==="weapon"||cat==="device");
+  const showQlt=isArt && meta.qlts && meta.qlts.length>=1;
   const showPtn=isArt && meta.ptns.length>=1;
 
   let html="";
@@ -839,6 +884,14 @@ function renderCatFilters(cat){
     html+=`<span class="fl">Редкость</span><select id="catRarity"><option value="">Любая</option>`;
     for(const rr of meta.rarities){
       html+=`<option value="${esc(rr)}"${st.rarity===rr?" selected":""}>${esc(RARITY_RU[rr]||rr)}</option>`;
+    }
+    html+=`</select>`;
+  }
+  if(showQlt){
+    const qltNames={0:"Обычное",1:"Необычное",2:"Особое",3:"Редкое",4:"Исключительное",5:"Легендарное",6:"Уникальное"};
+    html+=`<span class="fl">Качество</span><select id="catQlt"><option value="">Любое</option>`;
+    for(const q of meta.qlts){
+      html+=`<option value="${q}"${String(st.qlt)===String(q)?" selected":""}>${esc(qltNames[q]||("q"+q))}</option>`;
     }
     html+=`</select>`;
   }
@@ -865,6 +918,7 @@ function renderCatFilters(cat){
     const st2=getCatState(cat);
     st2.q=($("catItemQ")?.value||"").trim();
     st2.rarity=$("catRarity")?.value||"";
+    st2.qlt=$("catQlt")?.value||"";
     st2.ptn=$("catPtn")?.value||"";
     st2.sort=$("catSort")?.value||"name";
     saveCatView();
@@ -880,10 +934,11 @@ function renderCatFilters(cat){
   });
   $("catItemQ")?.addEventListener("input",()=>{ clearTimeout(window._catQT); window._catQT=setTimeout(apply,120); });
   $("catRarity")?.addEventListener("change",apply);
+  $("catQlt")?.addEventListener("change",apply);
   $("catPtn")?.addEventListener("change",apply);
   $("catSort")?.addEventListener("change",apply);
   $("catFilterReset")?.addEventListener("click",()=>{
-    catViewState[cat]={sub:"",rarity:"",ptn:"",q:"",sort:"name"};
+    catViewState[cat]={sub:"",rarity:"",qlt:"",ptn:"",q:"",sort:"name"};
     saveCatView();
     renderCatFilters(cat);
     renderCatItems(cat);
@@ -894,6 +949,13 @@ function filterCatItems(cat){
   let list=rows.filter(r=>(r.category||"other").split("/")[0]===cat);
   if(st.sub) list=list.filter(r=>itemSubCat(r)===st.sub);
   if(st.rarity) list=list.filter(r=>String(r.rarity||r.color||"").toUpperCase()===st.rarity);
+  if(st.qlt!=="" && st.qlt!=null){
+    const q=Number(st.qlt);
+    list=list.filter(r=>{
+      const v=r.minQlt!=null?Number(r.minQlt):(r.variantQlt!=null?Number(r.variantQlt):null);
+      return v!=null && v===q;
+    });
+  }
   if(st.ptn!=="" && st.ptn!=null){
     const p=Number(st.ptn);
     list=list.filter(r=>{
@@ -1914,7 +1976,11 @@ async function openItem(id,silent){
     }
     chart=renderSaleChart(7);
     const ch=v=>v==null?"—":((v>0?"+":"")+Number(v).toFixed(1)+"%");const chC=v=>v==null?"":(v<-3?"g":v>3?"r":"");
-    const srcNote=row.histSource==="last5_sales_qlt"?`медиана последних 5 продаж этой редкости (${row.histCount})`:row.histSource==="min_lot"?`мало продаж — ориентир = мин. лот (без рынка)`:row.histSource==="sales_2d"?`медиана продаж сегодня + вчера (${row.histCount})`:row.histSource==="sales_7d"?`медиана продаж 7д (${row.histCount})`:`${row.histSource||"—"} (${row.histCount||0})`;
+    const srcNote=row.dealNote
+      || (row.histSource==="min_lot"?`мало продаж — ориентир = мин. лот (без рынка)`
+      : row.histSource?.includes("median")?`медиана продаж (${row.histCount||0})`+(row.windowHours!=null?`, окно ~${row.windowHours}ч`:``)
+      : `${row.histSource||"—"} (${row.histCount||0})`);
+    const confLine=row.confidenceLabel?` · ${row.confidenceLabel}`:"";
     $("dBody").innerHTML=`
       <div style="margin-bottom:10px">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""} ${statusBadge(row)}
         <span class="sub" style="margin-left:8px">${esc(CAT_RU[(row.category||"").split("/")[0]]||row.category||"")}</span></div>
@@ -1933,7 +1999,7 @@ async function openItem(id,silent){
         <div class="val ${profit>=0?"g":"r"}">${profit>=0?"+":""}${fmt(profit)} (${profitPct>=0?"+":""}${Number(profitPct).toFixed(1)}%)</div></div>`:""}
       <div class="drawer-top">
         <div>
-          <div class="market-note"><b>${st.enoughSales?"Рыночный ориентир":"Недостаточно продаж для надёжного рынка"}</b> · ${esc(srcNote)}</div>
+          <div class="market-note"><b>${row.dataOk?"Рыночный ориентир":"Недостаточно продаж для надёжного рынка"}</b> · ${esc(srcNote)}${esc(confLine)}</div>
           <div class="sell-calc" id="sellCalc">
             <div class="sell-calc-title">Выставление на аукцион · комиссия 5%</div>
             <div class="sell-calc-grid">
