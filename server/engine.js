@@ -443,12 +443,10 @@ function parseVariantId(raw){
   return {baseId:s, qlt:null, variantId:s};
 }
 function variantDisplayName(baseName, qlt){
-  const short=qltShort(qlt);
-  if(short==null) return baseName;
-  // Compact name for strange artifact family
+  // Без названия цвета в имени — цвет только через rarity/qltColor в UI
   let base=baseName||"";
   if(/странн(ый)?\s*арт/i.test(base) || /strange\s*artifact/i.test(base)) base="Стран Арт";
-  return `${base} · ${short}`;
+  return base;
 }
 
 

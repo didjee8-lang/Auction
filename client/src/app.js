@@ -291,13 +291,13 @@ function renderFavs(){
     const price=listed?fmt(unit):(fallbackSale!=null?fmt(fallbackSale):"нет данных");
     const lotsTxt=listed?`${fmtN(r.lots)} лот.`:(fallbackSale!=null?"нет активных лотов · последняя продажа":"нет активных лотов");
     const qltCol=r.qltColor||null;
-    const qltTxt=r.qltShort||r.qltLabel||"";
+    const qltTxt="";
     const nameCol=qltCol||(tier?tier.color:"var(--text)");
     return`<div class="${cls}" data-id="${esc(id)}" style="${qltCol?`border-color:${qltCol}55`:""}">
       <button class="fav-star" data-fav-rm="${esc(id)}" title="Убрать из избранного">★</button>
       <div class="fav-top">
         <div class="fav-icon">${iconHtml(id,r.name)}</div>
-        <div class="fav-name" style="color:${nameCol}">${esc(r.name||id)}</div>
+        <div class="fav-name" style="color:${nameCol}">${esc(cleanItemName(r.name)||id)}</div>
       </div>
       ${qltTxt?`<div class="fav-qlt" style="color:${qltCol||"var(--muted)"}">${esc(qltTxt)}</div>`:""}
       <div class="fav-price" style="color:${listed?"var(--neon2)":"var(--muted)"}">${price}${listed?' <span style="font-size:9px;color:var(--muted)">/шт</span>':''}</div>
@@ -504,6 +504,13 @@ function tierBadge(row){
   }
   return null;
 }
+
+function cleanItemName(name){
+  if(!name) return name;
+  // Убрать хвост " · красн/зелён/серый/..." если пришёл со старого API
+  return String(name).replace(/\s*·\s*(серый|зелён|зелен|синий|фиол|красн|желт|уникал|grey|green|blue|purple|red|yellow|unique)\s*$/i, "").trim();
+}
+
 function statusBadge(row){
   if(row.status==="cheap")return`<span class="badge g">${esc(row.statusLabel||"Выгодно")}</span>`;
   if(row.status==="expensive")return`<span class="badge r">${esc(row.statusLabel||"Дорого")}</span>`;
@@ -576,8 +583,8 @@ function cardHtml(r){
     <button class="pcard-excl" data-excl="${esc(r.id)}" title="В исключения">−</button>
     <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
     <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
-    <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(r.name||r.id)}</div>
-    <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}</div>
+    <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(cleanItemName(r.name)||r.id)}</div>
+    <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}</div>
     <div class="pcard-price">${priceTxt}</div>
     <div class="pcard-qty"><b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b></div>
     ${profitLine}
@@ -619,7 +626,7 @@ function patchCardEl(el, r){
   }
   const rar=el.querySelector(".pcard-rarity");
   if(rar){
-    rar.innerHTML=`${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.qltShort?` <span class="badge-tier" style="background:${(r.qltColor||"#888")}22;color:${r.qltColor||"#aaa"}">${esc(r.qltShort)}</span>`:(r.qltLabel?` <span class="badge m">${esc(r.qltLabel)}</span>`:"")}`;
+    rar.innerHTML=`${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}`;
   }
   const priceEl=el.querySelector(".pcard-price");
   if(priceEl){
