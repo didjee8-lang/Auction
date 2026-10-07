@@ -1877,9 +1877,19 @@ async function openItem(id,silent){
   favBtn.classList.toggle("on",isFav(id));
   favBtn.textContent=isFav(id)?"★":"☆";
   favBtn.onclick=()=>toggleFav(id);
+  // Instant paint from memory cache (no wait for Stalzone)
+  if(itemCache[id] && !silent && $("dBody").dataset.itemId===id){
+    /* already showing previous body for same id */
+  } else if(itemCache[id] && !silent){
+    $("dBody").dataset.itemId=id;
+    /* leave loading or previous; full render after fetch */
+  }
   try{
     const drawerScrollState=saveScrollState();
-    const j=await(await fetch("/api/item/"+encodeURIComponent(id),{cache:"no-store"})).json();
+    const ac=typeof AbortController!=="undefined"?new AbortController():null;
+    const tmo=ac?setTimeout(()=>ac.abort(),12000):null;
+    const j=await(await fetch("/api/item/"+encodeURIComponent(id),{cache:"no-store",signal:ac?.signal})).json();
+    if(tmo)clearTimeout(tmo);
     if(!Array.isArray(j.history) && itemCache[id]?.history) j.history=itemCache[id].history;
     if(!Array.isArray(j.lots) && itemCache[id]?.lots) j.lots=itemCache[id].lots;
     itemCache[id]=j;

@@ -1103,6 +1103,36 @@ app.post("/api/priority",(req,res)=>{
   }
 });
 
+/** Fast live pull: first page of lots + history in parallel (drawer doesn't need all pages) */
+async function refreshItemLiveFast(baseId){
+  const pageSize = 80;
+  await Promise.all([
+    (async () => {
+      try {
+        const j = await api(`/auction/${encodeURIComponent(baseId)}/lots?offset=0&limit=${pageSize}&sort=buyout_price&order=asc&additional=true`);
+        const lots = parseLots(j);
+        if (lots.length) saveLots(baseId, lots, new Date().toISOString());
+      } catch {}
+    })(),
+    (async () => {
+      try {
+        const hj = await api(`/auction/${encodeURIComponent(baseId)}/history?limit=60&additional=true`);
+        const fresh = parseHistory(hj)
+          .filter(x => x && x.price > 0)
+          .map(x => ({ ...x, ts: x.ts || new Date().toISOString(), raw: x.raw || JSON.stringify(x) }));
+        if (fresh.length) {
+          const ins = DB.prepare(`INSERT OR REPLACE INTO sale_observations(item_id,sale_id,ts,price,amount,raw,qlt,ptn) VALUES(?,?,?,?,?,?,?,?)`);
+          const tx = DB.transaction(a => {
+            for (const x of a) ins.run(baseId, x.id, x.ts, x.price, x.amount, x.raw, x.qlt, x.ptn);
+          });
+          tx(fresh);
+        }
+      } catch {}
+    })(),
+  ]);
+  return true;
+}
+
 app.get("/api/item/:id",async(req,res)=>{
   const {baseId, qlt, ptn}=parseVariantId(req.params.id);
   const item=DB.prepare("SELECT * FROM items WHERE id=?").get(baseId);
@@ -1114,15 +1144,20 @@ app.get("/api/item/:id",async(req,res)=>{
     item.qltShort=qltShort(qlt);
     item.qltColor=QLT_COLOR[qlt];
   }
-  // Opening an item performs a live refresh of active lots, so a purchased
-  // lot disappears immediately instead of waiting for the background scanner.
-  let lots=[];
-  try{
-    lots=await fetchAllLots(baseId);
-    saveLots(baseId,lots,new Date().toISOString());
-  }catch{
-    lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(baseId);
-  }
+
+  // Soft timeout: don't block the UI for 10s on Stalzone latency
+  const forceLive = String(req.query.live||"") === "1";
+  const budgetMs = forceLive ? 8000 : 1800;
+  let liveOk = false;
+  try {
+    await Promise.race([
+      refreshItemLiveFast(baseId).then(() => { liveOk = true; }),
+      new Promise((resolve) => setTimeout(resolve, budgetMs)),
+    ]);
+  } catch {}
+
+  // Always serve from SQLite (updated if live finished in time)
+  let lots = DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 300").all(baseId);
   if(qlt!=null){
     lots=lots.filter(l=>Number(l.qlt)===qlt);
     if(ptn!=null){
@@ -1132,21 +1167,6 @@ app.get("/api/item/:id",async(req,res)=>{
   }
 
   const observations=DB.prepare("SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 2000").all(baseId).reverse();
-  // Persistent history: save fresh sales, then always read the displayed history
-  // from SQLite. A temporary empty API response never erases saved sales.
-  try{
-    const j=await api(`/auction/${encodeURIComponent(baseId)}/history?limit=200&additional=true`);
-    const fresh=parseHistory(j)
-      .filter(x=>x && x.price>0)
-      .map(x=>({...x,ts:x.ts||new Date().toISOString(),raw:x.raw||JSON.stringify(x)}));
-    if(fresh.length){
-      const ins=DB.prepare(`INSERT OR REPLACE INTO sale_observations(item_id,sale_id,ts,price,amount,raw,qlt,ptn) VALUES(?,?,?,?,?,?,?,?)`);
-      const tx=DB.transaction(a=>{
-        for(const x of a)ins.run(baseId,x.id,x.ts,x.price,x.amount,x.raw,x.qlt,x.ptn);
-      });
-      tx(fresh);
-    }
-  }catch{}
 
   let history;
   if(qlt!=null){
@@ -1186,6 +1206,8 @@ app.get("/api/item/:id",async(req,res)=>{
 
   res.json({
     item,observations,lots,history,
+    liveOk,
+    fromCache: !liveOk,
     stats:{
       ...sa,
       lastSale,
@@ -1195,6 +1217,11 @@ app.get("/api/item/:id",async(req,res)=>{
       salesAvg:sa.avgAll
     }
   });
+
+  // If we answered from cache, finish live refresh in background (next open is fresh)
+  if (!liveOk) {
+    refreshItemLiveFast(baseId).catch(() => {});
+  }
 });
 
 
