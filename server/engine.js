@@ -47,16 +47,16 @@ function estimateMarketDeal(itemId, qlt, ptn){
     `).all(itemId);
   } catch { saleGroup = []; }
 
-  // Strict match: same rarity; if ptn known on the lot, require same ptn (artefacts)
+  // Strict: same rarity (qlt) AND same sharpening (ptn). Never mix +0 with +3 etc.
+  const wantQ = qlt != null ? Number(qlt) : null;
+  const wantP = ptn != null && ptn !== "" ? Number(ptn) : null;
   saleGroup = saleGroup.filter(s => {
     const sq = s.qlt != null ? Number(s.qlt) : null;
-    const sp = s.ptn != null ? Number(s.ptn) : null;
-    if (qlt != null) {
-      if (sq !== Number(qlt)) return false;
-    }
-    if (ptn != null && Number(ptn) > 0) {
-      // sharpening present on buy lot → only compare same +N
-      if (sp !== Number(ptn)) return false;
+    const sp = s.ptn != null ? Number(s.ptn) : 0;
+    if (wantQ != null && sq !== wantQ) return false;
+    if (wantP != null) {
+      const wp = Number(wantP) || 0;
+      if (sp !== wp) return false;
     }
     return Number(s.price) > 0;
   });
@@ -435,12 +435,23 @@ const QLT_SHORT={0:"серый",1:"зелён",2:"синий",3:"фиол",4:"к
 const QLT_COLOR={0:"#9ca3af",1:"#4ade80",2:"#60a5fa",3:"#c084fc",4:"#f87171",5:"#fbbf24",6:"#ff2a2a"};
 function qltLabel(q){return q!=null && QLT_LABELS[q]!=null?QLT_LABELS[q]:null;}
 function qltShort(q){return q!=null && QLT_SHORT[q]!=null?QLT_SHORT[q]:null;}
-/** Parse virtual id "5logg@q2" → {baseId, qlt} */
+/** Parse virtual id "5logg@q2" or "5logg@q2p3" → {baseId, qlt, ptn} */
 function parseVariantId(raw){
   const s=String(raw||"");
-  const m=s.match(/^(.*)@q(\d+)$/);
-  if(m) return {baseId:m[1], qlt:Number(m[2]), variantId:s};
-  return {baseId:s, qlt:null, variantId:s};
+  const m=s.match(/^(.*)@q(\d+)(?:p(\d+))?$/);
+  if(m) return {
+    baseId: m[1],
+    qlt: Number(m[2]),
+    ptn: m[3] != null ? Number(m[3]) : null,
+    variantId: s,
+  };
+  return { baseId: s, qlt: null, ptn: null, variantId: s };
+}
+function makeVariantId(baseId, qlt, ptn){
+  let id = `${baseId}@q${qlt}`;
+  const p = ptn != null ? Number(ptn) : 0;
+  if (p > 0) id += `p${p}`;
+  return id;
 }
 function variantDisplayName(baseName, qlt){
   // Без названия цвета в имени — цвет только через rarity/qltColor в UI
@@ -839,16 +850,16 @@ function buildMarketRow(x){
   };
 }
 
-function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
-  // Build a market row as if only this qlt existed
-  const fakeLots=lotRowsForQlt;
+function buildVariantRow(baseItem, qlt, ptn, lotRowsForVariant, allLotRows){
+  // One card = one rarity (qlt) + one sharpening (ptn); own lots + own sales history
+  const fakeLots=lotRowsForVariant;
   const minLot=fakeLots[0]||null;
   const minP=minLot?.price??null;
-  const minPtn=minLot?.ptn??null;
+  const minPtn=ptn!=null?Number(ptn):(minLot?.ptn!=null?Number(minLot.ptn):0);
   const lotPrices=fakeLots.map(l=>l.price).filter(p=>p>0);
   const lotAvg=lotPrices.length?avgOf(lotPrices):null;
 
-  // Same robust estimate, locked to this rarity (qlt) + sharpening
+  // Market estimate ONLY from sales with same qlt + same ptn
   const mr=estimateMarketDeal(baseItem.id, qlt, minPtn);
   let ref=mr.ref, refSource=mr.refSource, refCount=mr.refCount, dataOk=mr.dataOk;
   if(!dataOk && minP!=null){
@@ -868,11 +879,24 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     else if(ratio>=1.08){ status="expensive"; statusLabel="Дорого"; }
     else { status="normal"; statusLabel="Обычная"; }
   } else if(minP){ status="has_lots"; statusLabel="В продаже"; }
-  const lastSaleRow=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY ts DESC LIMIT 1").get(baseItem.id, qlt, qlt);
+
+  // Last sale for THIS variant only
+  let lastSaleRow=null;
+  try {
+    lastSaleRow=DB.prepare(`
+      SELECT price,ts FROM sale_observations
+      WHERE item_id=? AND price>0
+        AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+        AND COALESCE(ptn,0)=?
+      ORDER BY datetime(ts) DESC LIMIT 1
+    `).get(baseItem.id, qlt, qlt, minPtn||0);
+  } catch {
+    lastSaleRow=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY ts DESC LIMIT 1").get(baseItem.id, qlt, qlt);
+  }
   const lastSale=lastSaleRow?.price??null;
   const sa=salesAverages(baseItem.id);
   const totalAmount=fakeLots.reduce((s,l)=>s+(Number(l.amount)||0),0);
-  const variantId=`${baseItem.id}@q${qlt}`;
+  const variantId=makeVariantId(baseItem.id, qlt, minPtn);
   const dispName=variantDisplayName(baseItem.name, qlt);
 
   return {
@@ -881,6 +905,7 @@ function buildVariantRow(baseItem, qlt, lotRowsForQlt, allLotRows){
     baseId: baseItem.id,
     name: dispName,
     variantQlt: qlt,
+    variantPtn: minPtn||0,
     min_price: minP,
     avg_price: lotAvg,
     max_price: lotPrices.length?lotPrices[lotPrices.length-1]:null,
@@ -971,23 +996,31 @@ function getMarketRows(force=false){
   for(const x of items){
     seenIds.add(x.id);
     const lotRows=getLots.all(x.id);
-    // Group by qlt (null → treat as 0 for grouping display if any qlt present)
-    const byQlt=new Map();
+    const isArtefact=/^artefact/i.test(String(x.category||"")) || /странн(ый)?\s*арт/i.test(x.name||"") || x.id==="5logg";
+    // Group by rarity + sharpening: each (qlt, ptn) is a separate market
+    const byVariant=new Map();
     for(const l of lotRows){
       const q=l.qlt!=null?Number(l.qlt):null;
       if(q==null) continue;
-      if(!byQlt.has(q)) byQlt.set(q, []);
-      byQlt.get(q).push(l);
+      const p=l.ptn!=null?Number(l.ptn):0;
+      const key=q+":"+p;
+      if(!byVariant.has(key)) byVariant.set(key, { qlt:q, ptn:p, lots:[] });
+      byVariant.get(key).lots.push(l);
     }
-    const expand = byQlt.size>=2 || (x.id==="5logg" && byQlt.size>=1) || /странн(ый)?\s*арт/i.test(x.name||"");
-    if(expand && byQlt.size>=1){
-      // One card per rarity that has lots
-      for(const q of [...byQlt.keys()].sort((a,b)=>a-b)){
-        const row=buildVariantRow(x, q, byQlt.get(q), lotRows);
+    const expand = isArtefact || byVariant.size>=2;
+    if(expand && byVariant.size>=1){
+      const keys=[...byVariant.keys()].sort((a,b)=>{
+        const [qa,pa]=a.split(":").map(Number);
+        const [qb,pb]=b.split(":").map(Number);
+        if(qa!==qb) return qa-qb;
+        return pa-pb;
+      });
+      for(const key of keys){
+        const g=byVariant.get(key);
+        const row=buildVariantRow(x, g.qlt, g.ptn, g.lots, lotRows);
         row.priority=prioIds.has(x.id);
         rows.push(row);
       }
-      // Also keep base row if there are lots without qlt
       const noQlt=lotRows.filter(l=>l.qlt==null);
       if(noQlt.length){
         const row=buildMarketRow(x);
@@ -1071,12 +1104,13 @@ app.post("/api/priority",(req,res)=>{
 });
 
 app.get("/api/item/:id",async(req,res)=>{
-  const {baseId, qlt}=parseVariantId(req.params.id);
+  const {baseId, qlt, ptn}=parseVariantId(req.params.id);
   const item=DB.prepare("SELECT * FROM items WHERE id=?").get(baseId);
   if(!item)return res.status(404).json({error:"item not found"});
   if(qlt!=null){
     item.name=variantDisplayName(item.name, qlt);
     item.variantQlt=qlt;
+    item.variantPtn=ptn!=null?Number(ptn):null;
     item.qltShort=qltShort(qlt);
     item.qltColor=QLT_COLOR[qlt];
   }
@@ -1089,7 +1123,13 @@ app.get("/api/item/:id",async(req,res)=>{
   }catch{
     lots=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC LIMIT 200").all(baseId);
   }
-  if(qlt!=null) lots=lots.filter(l=>Number(l.qlt)===qlt);
+  if(qlt!=null){
+    lots=lots.filter(l=>Number(l.qlt)===qlt);
+    if(ptn!=null){
+      const wp=Number(ptn)||0;
+      lots=lots.filter(l=>(l.ptn!=null?Number(l.ptn):0)===wp);
+    }
+  }
 
   const observations=DB.prepare("SELECT * FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 2000").all(baseId).reverse();
   // Persistent history: save fresh sales, then always read the displayed history
@@ -1110,12 +1150,25 @@ app.get("/api/item/:id",async(req,res)=>{
 
   let history;
   if(qlt!=null){
-    history=DB.prepare(
-      `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
-       FROM sale_observations
-       WHERE item_id=? AND price>0 AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
-       ORDER BY datetime(ts) DESC LIMIT 500`
-    ).all(baseId, qlt, qlt);
+    const wp = ptn!=null ? (Number(ptn)||0) : null;
+    if(wp!=null){
+      // Strict: same rarity + same sharpening only
+      history=DB.prepare(
+        `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
+         FROM sale_observations
+         WHERE item_id=? AND price>0
+           AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+           AND COALESCE(ptn,0)=?
+         ORDER BY datetime(ts) DESC LIMIT 500`
+      ).all(baseId, qlt, qlt, wp);
+    } else {
+      history=DB.prepare(
+        `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
+         FROM sale_observations
+         WHERE item_id=? AND price>0 AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL))
+         ORDER BY datetime(ts) DESC LIMIT 500`
+      ).all(baseId, qlt, qlt);
+    }
   } else {
     history=DB.prepare(
       `SELECT sale_id AS id,ts,price,amount,raw,qlt,ptn
@@ -1147,16 +1200,19 @@ app.get("/api/item/:id",async(req,res)=>{
 
 
 app.get("/api/item/:id/live",async(req,res)=>{
-  const {baseId, qlt, variantId}=parseVariantId(req.params.id);
+  const {baseId, qlt, ptn, variantId}=parseVariantId(req.params.id);
   liveBusy.add(baseId);
   try{
     let lots=await fetchAllLots(baseId);
     saveLots(baseId,lots,new Date().toISOString());
-    if(qlt!=null) lots=lots.filter(l=>Number(l.qlt)===qlt).sort((a,b)=>(a.price||0)-(b.price||0));
+    if(qlt!=null) lots=lots.filter(l=>Number(l.qlt)===qlt);
+    if(ptn!=null){ const wp=Number(ptn)||0; lots=lots.filter(l=>(l.ptn!=null?Number(l.ptn):0)===wp); }
+    lots=lots.sort((a,b)=>(a.price||0)-(b.price||0));
     res.json({ok:true,id:variantId,baseId,variantQlt:qlt,lots:lots.map(x=>({...x,totalPrice:Math.round(x.price*x.amount),qlt:x.qlt,ptn:x.ptn,created_at:x.created})),lotsCount:lots.length,minPrice:lots[0]?.price??null,minUnitPrice:lots[0]?.price??null,minAmount:lots[0]?.amount??null,minTotalPrice:lots[0]?Math.round(lots[0].price*lots[0].amount):null,ts:new Date().toISOString()});
   }catch(e){
     let cached=DB.prepare("SELECT * FROM lots WHERE item_id=? ORDER BY price ASC").all(baseId);
     if(qlt!=null) cached=cached.filter(l=>Number(l.qlt)===qlt);
+    if(ptn!=null){ const wp=Number(ptn)||0; cached=cached.filter(l=>(l.ptn!=null?Number(l.ptn):0)===wp); }
     res.json({ok:false,id:variantId,baseId,variantQlt:qlt,lots:cached.map(x=>({...x,totalPrice:Math.round(x.price*x.amount)})),lotsCount:cached.length,minPrice:cached[0]?.price??null,minUnitPrice:cached[0]?.price??null,minAmount:cached[0]?.amount??null,minTotalPrice:cached[0]?Math.round(cached[0].price*cached[0].amount):null,error:e.message});
   }finally{
     setTimeout(()=>liveBusy.delete(baseId), 2000);
@@ -1167,17 +1223,24 @@ app.get("/api/favorites/live",async(req,res)=>{
   const ids=String(req.query.ids||"").split(",").map(x=>decodeURIComponent(x)).filter(Boolean).slice(0,100);
   const rows=[];
   for(const rawId of ids){
-    const {baseId, qlt, variantId}=parseVariantId(rawId);
+    const {baseId, qlt, ptn, variantId}=parseVariantId(rawId);
     try{
       const lotsAll=await fetchAllLots(baseId);
       saveLots(baseId,lotsAll,new Date().toISOString());
       let lots=lotsAll;
-      if(qlt!=null) lots=lotsAll.filter(l=>Number(l.qlt)===qlt).sort((a,b)=>(a.price||0)-(b.price||0));
+      if(qlt!=null) lots=lots.filter(l=>Number(l.qlt)===qlt);
+      if(ptn!=null){ const wp=Number(ptn)||0; lots=lots.filter(l=>(l.ptn!=null?Number(l.ptn):0)===wp); }
+      lots=lots.sort((a,b)=>(a.price||0)-(b.price||0));
       const item=DB.prepare("SELECT * FROM items WHERE id=?").get(baseId)||{id:baseId,name:baseId};
       const name=qlt!=null?variantDisplayName(item.name,qlt):item.name;
       let last;
       if(qlt!=null){
-        last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY datetime(ts) DESC LIMIT 1").get(baseId,qlt,qlt);
+        const wp=ptn!=null?(Number(ptn)||0):null;
+        if(wp!=null){
+          last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) AND COALESCE(ptn,0)=? ORDER BY datetime(ts) DESC LIMIT 1").get(baseId,qlt,qlt,wp);
+        } else {
+          last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? AND (qlt IS ? OR (qlt IS NULL AND ? IS NULL)) ORDER BY datetime(ts) DESC LIMIT 1").get(baseId,qlt,qlt);
+        }
       } else {
         last=DB.prepare("SELECT price,ts FROM sale_observations WHERE item_id=? ORDER BY datetime(ts) DESC LIMIT 1").get(baseId);
       }

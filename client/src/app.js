@@ -541,7 +541,7 @@ function dealBreakdownHtml(r){
     ${confidenceBadge(r)}
   </div>`;
 }
-function baseItemId(id){return String(id||"").replace(/@q\d+$/,"")}
+function baseItemId(id){return String(id||"").replace(/@q\d+(?:p\d+)?$/,"")}
 function iconUrl(id){const b=baseItemId(id);return b?`/api/icon/${encodeURIComponent(b)}`:""}
 function iconHtml(id,name){
   return `<img src="${iconUrl(id)}" alt="" loading="lazy" decoding="async"
@@ -584,7 +584,7 @@ function cardHtml(r){
     <button class="pcard-fav${favOn?" on":""}" data-fav="${esc(r.id)}" title="${favOn?"Убрать из избранного":"В избранное"}">${favOn?"★":"☆"}</button>
     <div class="pcard-icon">${iconHtml(r.id,r.name)}</div>
     <div class="pcard-name" style="color:${r.qltColor||(tier?tier.color:"var(--text)")}">${esc(cleanItemName(r.name)||r.id)}</div>
-    <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}</div>
+    <div class="pcard-rarity">${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${r.variantPtn>0||r.minPtn>0?`<span class="badge m">+${r.variantPtn??r.minPtn}</span>`:""}</div>
     <div class="pcard-price">${priceTxt}</div>
     <div class="pcard-qty"><b>${hasLots?fmtN(r.lots)+" лот.":"нет лотов"}</b></div>
     ${profitLine}
@@ -626,7 +626,7 @@ function patchCardEl(el, r){
   }
   const rar=el.querySelector(".pcard-rarity");
   if(rar){
-    rar.innerHTML=`${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}`;
+    rar.innerHTML=`${tier?`<span class="badge-tier ${tier.cls}">${tier.label}</span>`:""}${(r.variantPtn>0||r.minPtn>0)?`<span class="badge m">+${r.variantPtn??r.minPtn}</span>`:""}`;
   }
   const priceEl=el.querySelector(".pcard-price");
   if(priceEl){
