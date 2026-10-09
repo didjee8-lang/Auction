@@ -484,3 +484,85 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   color:var(--neon);
   background:rgba(255,42,42,.06);
 }
+
+/* ===== compact small window (≈500×500 and similar) ===== */
+.pod-table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+#podTable{table-layout:fixed;width:100%;min-width:0}
+#podTable th:nth-child(1),#podTable td:nth-child(1){width:24px}
+#podTable th:nth-child(2),#podTable td:nth-child(2){width:28px}
+#podTable th:nth-child(3),#podTable td:nth-child(3){width:auto}
+#podTable th:nth-child(4),#podTable td:nth-child(4){width:56px}
+#podTable th:nth-child(5),#podTable td:nth-child(5){width:72px}
+#podTable th:nth-child(6),#podTable td:nth-child(6){width:64px}
+#podTable th:nth-child(7),#podTable td:nth-child(7){width:28px}
+#podTable input[data-pod-name]{width:100%;min-width:0}
+#podTable input[data-pod-qty],
+#podTable input[data-pod-price]{width:100%;min-width:0;max-width:100%}
+
+@media (max-width:700px),(max-height:640px){
+  .top{padding:4px 8px;gap:6px;flex-wrap:wrap}
+  .top .logo{font-size:14px}
+  .top .search{max-width:none;min-width:0;flex:1 1 120px;padding:6px 8px;font-size:12px}
+  .top .btn{padding:5px 8px;font-size:11px}
+  .top .status{font-size:10px;width:100%;order:5}
+  .dashboard{min-height:0;max-height:72px;padding:4px 6px;gap:4px}
+  .fav-card{min-width:88px;padding:4px}
+  .hunt{padding:4px 8px;gap:4px;flex-wrap:wrap}
+  .hunt input{min-width:0;flex:1 1 100px;padding:5px 6px;font-size:11px}
+  .filter-bar{padding:4px 8px;gap:4px}
+  .chip,.tab{padding:4px 7px;font-size:11px}
+  .pane-head{padding:6px 8px;gap:4px}
+  .pane-title{font-size:13px}
+  .scroll{padding:6px}
+  .main{grid-template-columns:1fr}
+  .cards{grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px}
+  .pcard{padding:6px}
+  .pcard-icon{width:48px;height:48px}
+  .pcard-name{font-size:11px}
+  .pcard-deal{display:none} /* hide bulky breakdown in tiny UI */
+  .calc-table{font-size:11px}
+  .calc-table th,.calc-table td{padding:4px 3px}
+  .calc-table input{width:100%;padding:4px 5px;font-size:11px}
+  .pod-help{display:none}
+  .pod-actions .btn{padding:5px 8px;font-size:11px}
+  .calc-sum{margin-top:8px;padding:6px 8px}
+  .calc-sum .row{margin:3px 0;font-size:12px}
+  .pod-drag{padding:2px;font-size:12px}
+  #podTable th.pod-drag-th,#podTable td.pod-drag-td{width:22px;padding:2px}
+  .drawer{width:min(100vw,100%);height:min(100vh,100%);max-height:100vh;border-radius:0}
+}
+
+@media (max-width:520px),(max-height:520px){
+  html{font-size:13px}
+  .top .status,.hunt-label{display:none}
+  .dashboard{max-height:56px}
+  .cards{grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:4px}
+  .pcard-icon{width:40px;height:40px}
+  .pcard-profit{font-size:10px}
+  #podTable th:nth-child(6),#podTable td:nth-child(6){width:52px;font-size:10px}
+  /* shorter headers on pod */
+  #podTable thead{font-size:9px}
+  .perekup-pane .pod-actions{gap:4px}
+  .btn{padding:4px 7px;font-size:10px}
+  .mobile-nav-btn{display:inline-flex}
+}
+
+/* Prefer filling height without forced horizontal scroll on side pane */
+.pane-side .scroll,
+.pane .scroll{
+  overflow-x:hidden;
+  overflow-y:auto;
+}
+#perekupPane,#calcPane,#dealsPane,#catalogPane,#catItemsPane{
+  max-width:100%;
+  box-sizing:border-box;
+}
+
+.short-h{display:none}
+@media (max-width:640px),(max-height:600px){
+  .full-h{display:none}
+  .short-h{display:inline}
+  .pod-name-inp{padding:4px 5px !important;font-size:11px !important}
+  #podTable input{padding:4px 5px;font-size:11px}
+  .pod-color-btn{width:22px !important;height:22px !important;border-radius:5px !important}
+}

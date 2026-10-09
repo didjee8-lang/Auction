@@ -110,21 +110,23 @@
           </div>
         </div>
       </div>
-      <div id="perekupPane" style="display:none">
-        <div class="sub" style="margin-bottom:8px">Быстрый подсчёт для перекупа: название, цвет, цена / шт. сохраняются. При сделке только впиши количество.</div>
+      <div id="perekupPane" style="display:none" class="perekup-pane">
+        <div class="sub pod-help" style="margin-bottom:8px">Быстрый подсчёт: название, цвет, цена / шт. сохраняются. При сделке — только количество.</div>
+        <div class="pod-table-wrap">
         <table class="calc-table" id="podTable">
           <thead><tr>
             <th class="pod-drag-th" title="Перетащить"></th>
-            <th style="width:12%">Цвет</th>
-            <th style="width:26%">Предмет</th>
-            <th style="width:16%">Цена / шт.</th>
-            <th style="width:12%">Кол-во</th>
-            <th style="width:16%">Сумма</th>
+            <th class="pod-col-color" style="width:12%">Цвет</th>
+            <th class="pod-col-name" style="width:26%">Предмет</th>
+            <th class="pod-col-price" style="width:16%"><span class="full-h">Цена / шт.</span><span class="short-h">Цена</span></th>
+            <th class="pod-col-qty" style="width:12%"><span class="full-h">Кол-во</span><span class="short-h">Кол</span></th>
+            <th class="pod-col-sum" style="width:16%">Сумма</th>
             <th></th>
           </tr></thead>
           <tbody id="podBody"></tbody>
         </table>
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+        </div>
+        <div class="pod-actions" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">
           <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
           <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
           <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
@@ -135,7 +137,7 @@
             <b id="podSum" class="pod-copy" title="Копирует и сохраняет в историю" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
           </div>
           <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
-          <div class="sub" style="margin-top:4px">Кликни по общей сумме — скопируется и сохранится в историю (предметы, кол-во, цены)</div>
+          <div class="sub pod-help" style="margin-top:4px">Кликни по сумме — копия + история</div>
         </div>
         <div id="podHistPanel" style="display:none;margin-top:14px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">

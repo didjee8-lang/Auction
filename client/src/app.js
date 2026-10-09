@@ -1532,7 +1532,7 @@ function renderPod(opts){
             box-shadow:0 12px 28px rgba(0,0,0,.75),0 0 12px var(--glow)">${swatches}</div>
         </div>
       </td>
-      <td><input type="text" data-pod-name="${esc(r.id)}" value="${esc(r.name||"")}" placeholder="Название" autocomplete="off" style="color:${hex};font-weight:600;width:100%;min-width:100px;background:var(--bg);border:1px solid var(--border);padding:7px 8px;border-radius:6px"></td>
+      <td><input type="text" data-pod-name="${esc(r.id)}" value="${esc(r.name||"")}" placeholder="Название" autocomplete="off" class="pod-name-inp" style="color:${hex};font-weight:600;width:100%;min-width:0;background:var(--bg);border:1px solid var(--border);padding:7px 8px;border-radius:6px;box-sizing:border-box"></td>
       <td><input type="text" inputmode="decimal" data-pod-price="${esc(r.id)}" value="${esc(String(r.price??""))}" placeholder="Цена / шт." autocomplete="off"></td>
       <td><input type="text" inputmode="numeric" data-pod-qty="${esc(r.id)}" value="${esc(String(r.qty??""))}" placeholder="Кол-во" autocomplete="off"></td>
       <td class="pod-line-sum pod-copy" style="font-weight:700;color:var(--neon2);user-select:none;padding:2px 6px;border-radius:6px;border:1px dashed transparent">—</td>
@@ -2459,6 +2459,15 @@ window.addEventListener("resize",()=>{
   }
 });
 
+
+
+function applyCompactLayout(){
+  const w=window.innerWidth, h=window.innerHeight;
+  document.body.classList.toggle("compact-ui", w<=700 || h<=640);
+  document.body.classList.toggle("tiny-ui", w<=520 || h<=520);
+}
+window.addEventListener("resize",()=>{ clearTimeout(window._compactT); window._compactT=setTimeout(applyCompactLayout,80); });
+applyCompactLayout();
 
 load(true);updateStatus();
 // SSE: сервер пушит после скана — клиент подтягивает дельту
