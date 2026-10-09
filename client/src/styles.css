@@ -463,3 +463,24 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   transform:translateY(8px) scale(.97);
   animation:pcardIn .32s cubic-bezier(.22,.61,.36,1) forwards;
 }
+
+.auction-more{
+  grid-column:1/-1;
+  margin:8px auto 16px;
+  display:block;
+  min-width:180px;
+  padding:10px 20px;
+  border-radius:10px;
+  border:1px solid var(--border);
+  background:var(--panel);
+  color:var(--text);
+  font-size:13px;
+  font-weight:600;
+  cursor:pointer;
+  transition:border-color .15s, background .15s, color .15s;
+}
+.auction-more:hover{
+  border-color:var(--neon);
+  color:var(--neon);
+  background:rgba(255,42,42,.06);
+}

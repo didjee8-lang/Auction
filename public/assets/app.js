@@ -549,6 +549,15 @@ function iconHtml(id,name){
 /* --- smooth auction updates (no micro-freeze) --- */
 let _auctionRenderedIds=[];
 let _pendingAuctionList=null;
+const AUCTION_PAGE_SIZE=30;
+let auctionShowCount=AUCTION_PAGE_SIZE;
+let _auctionListKey=""; // reset page when filter/sort/search changes
+function auctionListKey(list, mode){
+  const q=($("q")?.value||"").trim().toLowerCase();
+  return [mode, filter, sortBy, q, list.length, list[0]?.id||"", list[list.length-1]?.id||""].join("|");
+}
+function resetAuctionPage(){ auctionShowCount=AUCTION_PAGE_SIZE; }
+
 let _userBusyUntil=0;
 function markUserBusy(ms){
   _userBusyUntil=Math.max(_userBusyUntil, Date.now()+(ms||800));
@@ -725,9 +734,9 @@ function paintAuctionList(list, mode, opts){
   if(!box) return;
   const animateNew=!(opts&&opts.noAnim);
   const forceFull=!!(opts&&opts.forceFull);
-  $("activeCnt").textContent=list.length?`(${list.length})`:"";
-
   if(mode==="excl"){
+    $("activeCnt").textContent=list.length?`(${list.length})`:"";
+
     if(!list.length){
       box.innerHTML=`<div class="empty" style="grid-column:1/-1">Исключений нет. Нажми «−» на карточке</div>`;
       _auctionRenderedIds=[];
@@ -752,21 +761,35 @@ function paintAuctionList(list, mode, opts){
   if(!list.length){
     box.innerHTML=`<div class="empty" style="grid-column:1/-1">Нет лотов. Нажми «Сканировать» или смени фильтр</div>`;
     _auctionRenderedIds=[];
+    auctionShowCount=AUCTION_PAGE_SIZE;
     return;
   }
 
-  const nextIds=list.map(r=>r.id);
+  // Reset visible page when filter/sort/search set changes
+  const key=auctionListKey(list, mode);
+  if(key!==_auctionListKey){
+    _auctionListKey=key;
+    if(!(opts&&opts.keepPage)) auctionShowCount=AUCTION_PAGE_SIZE;
+  }
+  const totalAll=list.length;
+  const visible=list.slice(0, Math.max(AUCTION_PAGE_SIZE, auctionShowCount));
+  const hasMore=visible.length<totalAll;
+
+  const nextIds=visible.map(r=>r.id);
   const prevIds=_auctionRenderedIds;
   const sameOrder=!forceFull && prevIds.length===nextIds.length && prevIds.every((id,i)=>id===nextIds[i]);
   const existingMap=new Map();
   box.querySelectorAll(".pcard[data-id]").forEach(el=>existingMap.set(el.dataset.id, el));
 
-  if(sameOrder && existingMap.size===list.length){
-    for(const r of list){
+  if(sameOrder && existingMap.size===visible.length && !box.querySelector(".auction-more")){
+    for(const r of visible){
       const el=existingMap.get(r.id);
       if(el) patchCardEl(el, r);
     }
+    // keep/update more button state
+    syncAuctionMoreBtn(box, hasMore, totalAll, visible.length);
     _auctionRenderedIds=nextIds;
+    $("activeCnt").textContent=totalAll?`(${visible.length}/${totalAll})`:"";
     return;
   }
 
@@ -779,7 +802,7 @@ function paintAuctionList(list, mode, opts){
   const maxStagger=6;
   const staggerMs=55;
 
-  list.forEach((r)=>{
+  visible.forEach((r)=>{
     let el=existingMap.get(r.id);
     if(el){
       patchCardEl(el, r);
@@ -803,12 +826,42 @@ function paintAuctionList(list, mode, opts){
     }
   });
   box.querySelectorAll(".empty").forEach(e=>e.remove());
-  // remove children that weren't moved into frag
   while(box.firstChild) box.removeChild(box.firstChild);
   box.appendChild(frag);
   bindCardEvents(box);
+  syncAuctionMoreBtn(box, hasMore, totalAll, visible.length);
   _auctionRenderedIds=nextIds;
+  $("activeCnt").textContent=totalAll?`(${visible.length}/${totalAll})`:"";
 }
+function syncAuctionMoreBtn(box, hasMore, totalAll, shown){
+  if(!box) return;
+  let btn=box.querySelector(".auction-more");
+  if(!hasMore){
+    if(btn) btn.remove();
+    return;
+  }
+  if(!btn){
+    btn=document.createElement("button");
+    btn.type="button";
+    btn.className="auction-more";
+    btn.addEventListener("click",(e)=>{
+      e.preventDefault();
+      e.stopPropagation();
+      auctionShowCount+=AUCTION_PAGE_SIZE;
+      renderCards({forceFull:true, noAnim:true, keepPage:true});
+      // scroll button into view after expand
+      requestAnimationFrame(()=>{
+        const b=$("cards")?.querySelector(".auction-more");
+        if(b) b.scrollIntoView({block:"nearest", behavior:"smooth"});
+      });
+    });
+    box.appendChild(btn);
+  }
+  const left=Math.max(0, totalAll-shown);
+  const next=Math.min(AUCTION_PAGE_SIZE, left);
+  btn.textContent=`Ещё ${next} · осталось ${left}`;
+}
+
 function renderCards(opts){
   const {mode, list}=getAuctionList();
   if(opts&&opts.fromPoll && isUserBusy() && mode==="main"){
@@ -2316,9 +2369,9 @@ $("calcQ").onfocus=updateCalcSuggest;
 document.addEventListener("click",e=>{if(!e.target.closest(".calc-search"))$("calcSuggest").classList.remove("open")});
 document.querySelectorAll(".chips .chip").forEach(c=>{
   c.onclick=()=>{
-    if(c.dataset.s==="profit"){sortBy=sortBy==="profit"?"new":"profit";c.classList.toggle("active",sortBy==="profit");renderCards();return}
+    if(c.dataset.s==="profit"){sortBy=sortBy==="profit"?"new":"profit";c.classList.toggle("active",sortBy==="profit");resetAuctionPage();renderCards({forceFull:true});return}
     document.querySelectorAll(".chips .chip[data-f]").forEach(x=>x.classList.remove("active"));
-    c.classList.add("active");filter=c.dataset.f;renderCards();
+    c.classList.add("active");filter=c.dataset.f;resetAuctionPage();renderCards({forceFull:true});
   };
 });
 document.querySelectorAll("#mainTabs .tab").forEach(t=>{
