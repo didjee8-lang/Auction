@@ -1,173 +1,255 @@
-/** Убежище — калькулятор крафта (таблица как stalfarm /crafts) */
+/** Убежище — крафт с нуля: сетка 3 карточки, цены из API + аукцион */
 const HO_FEE = 0.05;
 const HO_LS = "sz_hideout_v1";
 
-function hoEsc(str){
-  return String(str??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-}
-function esc(str){ return hoEsc(str); }
-function hoGetRows(){
-  if(typeof window!=="undefined" && Array.isArray(window.rows)) return window.rows;
-  if(typeof rows!=="undefined" && Array.isArray(rows)) return rows;
-  return [];
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
-let hoRecipes = [];
-let hoLoaded = false;
-let hoPriceCache = {}; // id -> {price, source, sales7d, soldPerDay}
-let hoPriceCacheAt = 0;
-let hoState = (() => {
-  try { return JSON.parse(localStorage.getItem(HO_LS) || "{}"); } catch { return {}; }
-})();
-if (!hoState || typeof hoState !== "object") hoState = {};
-hoState = Object.assign({
-  q: "", hasItem: "", bench: "", cat: "", sort: "profit",
-  minProfit: 0, minRoi: 0, budget: "",
-  crafts: {}, stock: {}, manualPrice: {}, selected: null,
-}, hoState);
-
-function hoSave() {
-  try { localStorage.setItem(HO_LS, JSON.stringify(hoState)); } catch {}
-}
-
-function hoPrice(itemId) {
-  const base = String(itemId || "").replace(/@q\d+(?:p\d+)?$/, "");
-  if (!base) return { price: null, source: "none", sales: 0 };
-
-  if (hoState.manualPrice[base] != null && hoState.manualPrice[base] !== "") {
-    const n = Number(String(hoState.manualPrice[base]).replace(/\s/g, "").replace(",", "."));
-    if (Number.isFinite(n) && n >= 0) return { price: n, source: "manual", sales: 0 };
-  }
-
-  const cached = hoPriceCache[base];
-  if (cached && cached.price != null && cached.price > 0) {
-    return { price: cached.price, source: cached.source || "cache", sales: cached.soldPerDay || cached.sales7d || 0 };
-  }
-
-  const marketRows = hoGetRows();
-  let best = null;
-  let sales = 0;
-  for (const r of marketRows) {
-    const id = String(r.id || "").replace(/@q\d+(?:p\d+)?$/, "");
-    if (id !== base) continue;
-    const candidates = [r.minUnitPrice, r.min_price, r.minPrice, r.lastSale, r.refPrice, r.marketPrice, r.price];
-    for (const p of candidates) {
-      const n = Number(p);
-      if (Number.isFinite(n) && n > 0 && (best == null || n < best)) best = n;
-    }
-    const s = Number(r.soldPerDay || r.sales7d || r.salesToday || r.liquidity || 0) || 0;
-    if (s > sales) sales = s;
-  }
-  if (best != null) return { price: best, source: "market", sales };
-
-  if (cached && cached.price != null) {
-    return { price: cached.price, source: cached.source || "cache", sales: cached.soldPerDay || 0 };
-  }
-  return { price: null, source: "none", sales: 0 };
-}
-
-function hoCalc(recipe, craftCount) {
-  const n = Math.max(1, Math.floor(Number(craftCount) || 1));
-  const ings = recipe.ingredients || [];
-  const resAmt = (recipe.result && recipe.result.amount) || 1;
-  const outId = recipe.result && recipe.result.id;
-  const sellInfo = outId ? hoPrice(outId) : { price: null, source: "none", sales: 0 };
-  const sellUnit = sellInfo.price;
-
-  let matCost = 0, buyCost = 0, missingLines = 0;
-  const lines = [];
-  for (const ing of ings) {
-    const need = (Number(ing.amount) || 0) * n;
-    const own = Math.max(0, Number(hoState.stock[ing.id]) || 0);
-    const toBuy = Math.max(0, need - own);
-    const pi = hoPrice(ing.id);
-    const unit = pi.price;
-    const lineMat = unit != null ? unit * need : null;
-    const lineBuy = unit != null ? unit * toBuy : null;
-    if (lineMat != null) matCost += lineMat; else missingLines++;
-    if (lineBuy != null) buyCost += lineBuy;
-    lines.push({ id: ing.id, name: ing.name, need, own, toBuy, unit, source: pi.source, lineMat, lineBuy });
-  }
-
-  const outQty = resAmt * n;
-  const gross = sellUnit != null ? sellUnit * outQty : null;
-  const fee = gross != null ? Math.round(gross * HO_FEE) : null;
-  const netRevenue = gross != null ? gross - fee : null;
-  const profitCash = netRevenue != null && missingLines === 0 ? Math.round(netRevenue - buyCost) : null;
-  const profitFull = netRevenue != null && missingLines === 0 ? Math.round(netRevenue - matCost) : null;
-  const roi = profitCash != null && buyCost > 0 ? Math.round((profitCash / buyCost) * 1000) / 10
-    : (profitCash != null && buyCost === 0 && profitCash > 0 ? Infinity : null);
-  const breakEven = (outQty > 0 && missingLines === 0)
-    ? Math.ceil((buyCost / outQty) / (1 - HO_FEE)) : null;
-
-  let status = "nodata";
-  if (missingLines > 0 || sellUnit == null) status = "nodata";
-  else if (profitCash != null && profitCash > 0) status = "good";
-  else if (profitCash != null && profitCash === 0) status = "edge";
-  else if (profitCash != null && profitCash < 0) status = "bad";
-
-  return {
-    n, outQty, lines, matCost, buyCost, missingLines,
-    sellUnit, sellSource: sellInfo.source, sales: sellInfo.sales || 0,
-    gross, fee, netRevenue, profitCash, profitFull, roi, breakEven, status,
-  };
-}
-
-function hoStatusLabel(s) {
-  if (s === "good") return { t: "Выгодно", cls: "ho-good" };
-  if (s === "edge") return { t: "На грани", cls: "ho-edge" };
-  if (s === "bad") return { t: "Убыточно", cls: "ho-bad" };
-  return { t: "Нет цен", cls: "ho-nodata" };
-}
-
-function hoFmt(n) {
+function fmtMoney(n) {
   if (n == null || !Number.isFinite(n)) return "—";
   if (n === Infinity) return "∞";
   return Math.round(n).toLocaleString("ru-RU") + " ₽";
 }
-function hoIconHtml(id, name) {
-  const letter = String(name || id || "?").replace(/[«»"]/g,"").trim().charAt(0).toUpperCase() || "?";
-  if (!id) return `<span class="ho-ph">${hoEsc(letter)}</span>`;
-  const src = `/api/icon/${encodeURIComponent(id)}`;
-  return `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex')"><span class="ho-ph" style="display:none">${hoEsc(letter)}</span>`;
-}
-function hoFmtN(n) {
+
+function fmtNum(n) {
   if (n == null || !Number.isFinite(n)) return "—";
   return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
 }
 
+function baseId(id) {
+  return String(id || "").replace(/@q\d+(?:p\d+)?$/, "");
+}
 
-async function hoEnsurePrices(force = false) {
-  if (!hoRecipes.length) return;
-  if (!force && hoPriceCacheAt && Date.now() - hoPriceCacheAt < 60000 && Object.keys(hoPriceCache).length > 50) return;
-  const ids = new Set();
-  for (const r of hoRecipes) {
-    if (r.result?.id) ids.add(String(r.result.id));
-    for (const ing of r.ingredients || []) if (ing.id) ids.add(String(ing.id));
+function getMarketRows() {
+  try {
+    if (typeof window !== "undefined" && Array.isArray(window.rows)) return window.rows;
+  } catch {}
+  try {
+    if (typeof rows !== "undefined" && Array.isArray(rows)) return rows;
+  } catch {}
+  return [];
+}
+
+function iconHtml(id, name) {
+  const letter = String(name || id || "?")
+    .replace(/[«»"]/g, "")
+    .trim()
+    .charAt(0)
+    .toUpperCase() || "?";
+  if (!id) return `<span class="ho2-ph">${esc(letter)}</span>`;
+  return `<img src="/api/icon/${encodeURIComponent(baseId(id))}" alt="" loading="lazy" decoding="async" onerror="this.style.display='none';var n=this.nextElementSibling;if(n)n.style.display='flex'"><span class="ho2-ph" style="display:none">${esc(letter)}</span>`;
+}
+
+let recipes = [];
+let loaded = false;
+let priceMap = Object.create(null); // id -> {price, source, soldPerDay}
+let priceAt = 0;
+
+let state = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(HO_LS) || "{}") || {};
+  } catch {
+    return {};
   }
-  // also merge live market rows into cache first
-  for (const r of hoGetRows()) {
-    const id = String(r.id || "").replace(/@q\d+(?:p\d+)?$/, "");
+})();
+state = Object.assign(
+  {
+    q: "",
+    has: "",
+    bench: "",
+    cat: "",
+    sort: "profit",
+    minProfit: "",
+    minRoi: "",
+    budget: "",
+    crafts: {},
+    stock: {},
+    manualPrice: {},
+    selected: null,
+  },
+  state
+);
+
+function save() {
+  try {
+    localStorage.setItem(HO_LS, JSON.stringify(state));
+  } catch {}
+}
+
+function priceOf(itemId) {
+  const id = baseId(itemId);
+  if (!id) return { price: null, source: "none", sales: 0 };
+
+  const man = state.manualPrice[id];
+  if (man != null && man !== "") {
+    const n = Number(String(man).replace(/\s/g, "").replace(",", "."));
+    if (Number.isFinite(n) && n >= 0) return { price: n, source: "manual", sales: 0 };
+  }
+
+  const c = priceMap[id];
+  if (c && c.price != null && c.price > 0) {
+    return { price: c.price, source: c.source || "db", sales: c.soldPerDay || 0 };
+  }
+
+  // live auction rows
+  let best = null;
+  let sales = 0;
+  for (const r of getMarketRows()) {
+    if (baseId(r.id) !== id) continue;
+    for (const p of [r.minUnitPrice, r.min_price, r.minPrice, r.lastSale]) {
+      const n = Number(p);
+      if (Number.isFinite(n) && n > 0 && (best == null || n < best)) best = n;
+    }
+    const s = Number(r.soldPerDay || r.sales7d || 0) || 0;
+    if (s > sales) sales = s;
+  }
+  if (best != null) return { price: best, source: "market", sales };
+  return { price: null, source: "none", sales: 0 };
+}
+
+function calc(recipe, nCrafts) {
+  const n = Math.max(1, Math.floor(Number(nCrafts) || 1));
+  const ings = recipe.ingredients || [];
+  const resAmt = (recipe.result && recipe.result.amount) || 1;
+  const outId = recipe.result && recipe.result.id;
+  const sell = outId ? priceOf(outId) : { price: null, source: "none", sales: 0 };
+
+  let buyCost = 0;
+  let missing = 0;
+  const lines = [];
+  for (const ing of ings) {
+    const need = (Number(ing.amount) || 0) * n;
+    const own = Math.max(0, Number(state.stock[ing.id]) || 0);
+    const toBuy = Math.max(0, need - own);
+    const pi = priceOf(ing.id);
+    if (pi.price == null) missing++;
+    else buyCost += pi.price * toBuy;
+    lines.push({
+      id: ing.id,
+      name: ing.name,
+      need,
+      own,
+      toBuy,
+      unit: pi.price,
+      source: pi.source,
+      sum: pi.price != null ? pi.price * toBuy : null,
+    });
+  }
+
+  const outQty = resAmt * n;
+  const gross = sell.price != null ? sell.price * outQty : null;
+  const fee = gross != null ? Math.round(gross * HO_FEE) : null;
+  const net = gross != null ? gross - fee : null;
+  const profit = net != null && missing === 0 ? Math.round(net - buyCost) : null;
+  const roi =
+    profit != null && buyCost > 0
+      ? Math.round((profit / buyCost) * 1000) / 10
+      : profit != null && buyCost === 0 && profit > 0
+        ? Infinity
+        : null;
+
+  let status = "nodata";
+  if (missing === 0 && sell.price != null) {
+    if (profit > 0) status = "good";
+    else if (profit < 0) status = "bad";
+    else status = "edge";
+  }
+
+  return {
+    n,
+    outQty,
+    lines,
+    buyCost: missing ? null : buyCost,
+    missing,
+    sellUnit: sell.price,
+    sales: sell.sales || 0,
+    gross,
+    fee,
+    net,
+    profit,
+    roi,
+    status,
+  };
+}
+
+function perkText(recipe) {
+  const p = recipe.perks || {};
+  const map = {
+    ammunition: "Боеприпасы",
+    pyrotechnics: "Пиротехника",
+    armorer: "Бронепластины",
+    engineering: "Инженерия",
+    cooking: "Кулинария",
+    brewing: "Самогоноварение",
+    medicine: "Медицина",
+    materials: "Сырьё",
+  };
+  return Object.keys(p)
+    .map((k) => `${map[k] || k} · ур. ${p[k]}`)
+    .join(", ");
+}
+
+function statusLabel(st) {
+  if (st === "good") return { t: "Выгодно", cls: "good" };
+  if (st === "bad") return { t: "Убыток", cls: "bad" };
+  if (st === "edge") return { t: "Ноль", cls: "edge" };
+  return { t: "Нет цен", cls: "nodata" };
+}
+
+async function loadRecipes() {
+  if (loaded && recipes.length) return;
+  const urls = ["/hideout_recipes.json", "/api/hideout/recipes", "/assets/hideout_recipes.json"];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (text.trimStart().startsWith("<")) continue;
+      const j = JSON.parse(text);
+      if (Array.isArray(j) && j.length) {
+        recipes = j;
+        loaded = true;
+        return;
+      }
+    } catch {}
+  }
+  recipes = [];
+  loaded = false;
+}
+
+async function loadPrices() {
+  const ids = new Set();
+  for (const r of recipes) {
+    if (r.result?.id) ids.add(baseId(r.result.id));
+    for (const ing of r.ingredients || []) if (ing.id) ids.add(baseId(ing.id));
+  }
+
+  // seed from live market
+  for (const r of getMarketRows()) {
+    const id = baseId(r.id);
     if (!id) continue;
-    const candidates = [r.minUnitPrice, r.min_price, r.minPrice, r.lastSale];
     let best = null;
-    for (const p of candidates) {
+    for (const p of [r.minUnitPrice, r.min_price, r.minPrice, r.lastSale]) {
       const n = Number(p);
       if (Number.isFinite(n) && n > 0 && (best == null || n < best)) best = n;
     }
     if (best != null) {
-      hoPriceCache[id] = {
+      priceMap[id] = {
         price: best,
         source: "market",
-        sales7d: r.sales7d || 0,
-        soldPerDay: r.soldPerDay || 0,
+        soldPerDay: Number(r.soldPerDay || 0) || 0,
       };
     }
   }
+
   const list = [...ids];
-  const chunk = 400;
-  for (let i = 0; i < list.length; i += chunk) {
-    const part = list.slice(i, i + chunk);
+  for (let i = 0; i < list.length; i += 400) {
+    const part = list.slice(i, i + 400);
     try {
       const res = await fetch("/api/hideout/prices", {
         method: "POST",
@@ -176,403 +258,432 @@ async function hoEnsurePrices(force = false) {
       });
       if (!res.ok) continue;
       const j = await res.json();
-      if (j && j.prices) {
-        for (const [id, info] of Object.entries(j.prices)) {
-          if (!info) continue;
-          // prefer existing market lot if cheaper
-          const prev = hoPriceCache[id];
-          if (info.price != null && info.price > 0) {
-            if (!prev || prev.price == null || info.price < prev.price || prev.source === "none") {
-              hoPriceCache[id] = info;
-            } else if (prev && (info.soldPerDay || info.sales7d)) {
-              prev.soldPerDay = info.soldPerDay || prev.soldPerDay;
-              prev.sales7d = info.sales7d || prev.sales7d;
-            }
-          } else if (!prev) {
-            hoPriceCache[id] = info;
-          }
+      if (!j?.prices) continue;
+      for (const [id, info] of Object.entries(j.prices)) {
+        if (!info || info.price == null || !(info.price > 0)) continue;
+        const prev = priceMap[id];
+        if (!prev || prev.price == null || info.price < prev.price) {
+          priceMap[id] = {
+            price: info.price,
+            source: info.source || "db",
+            soldPerDay: info.soldPerDay || 0,
+          };
+        } else if (prev && info.soldPerDay) {
+          prev.soldPerDay = info.soldPerDay;
         }
       }
     } catch (e) {
-      console.warn("hoEnsurePrices", e);
+      console.warn("hideout prices", e);
     }
   }
-  hoPriceCacheAt = Date.now();
+  priceAt = Date.now();
 }
 
-async function hoLoadRecipes() {
-  if (hoLoaded && hoRecipes.length) return;
-  const paths = ["/hideout_recipes.json", "/api/hideout/recipes", "/assets/hideout_recipes.json", "hideout_recipes.json"];
-  let lastErr = null;
-  for (const url of paths) {
-    try {
-      const r = await fetch(url, { cache: "no-store" });
-      if (!r.ok) { lastErr = new Error("HTTP " + r.status); continue; }
-      const text = await r.text();
-      if (text.trimStart().startsWith("<")) { lastErr = new Error("HTML at " + url); continue; }
-      const j = JSON.parse(text);
-      hoRecipes = Array.isArray(j) ? j : [];
-      if (hoRecipes.length) { hoLoaded = true; return; }
-    } catch (e) { lastErr = e; }
-  }
-  console.warn("hideout recipes failed", lastErr);
-  hoRecipes = [];
-  hoLoaded = false;
-}
-
-function hoPerkName(recipe) {
-  const p = recipe.perks || {};
-  const keys = Object.keys(p);
-  if (!keys.length) return "";
-  const map = {
-    ammunition: "Боеприпасы", pyrotechnics: "Пиротехника", armorer: "Бронепластины",
-    engineering: "Инженерия", cooking: "Кулинария", brewing: "Самогоноварение",
-    medicine: "Медицина", materials: "Сырьё и материалы",
-  };
-  return keys.map(k => `${map[k]||k} · ур. ${p[k]}`).join(", ");
-}
-
-function hoFiltered() {
-  let list = hoRecipes.slice();
-  const q = (hoState.q || "").trim().toLowerCase();
-  const has = (hoState.hasItem || "").trim().toLowerCase();
-  if (hoState.bench) list = list.filter(r => r.bench === hoState.bench);
-  if (hoState.cat) list = list.filter(r => r.category === hoState.cat);
+function filtered() {
+  let list = recipes.slice();
+  const q = (state.q || "").trim().toLowerCase();
+  const has = (state.has || "").trim().toLowerCase();
+  if (state.bench) list = list.filter((r) => r.bench === state.bench);
+  if (state.cat) list = list.filter((r) => r.category === state.cat);
   if (q) {
-    list = list.filter(r => {
-      const blob = [r.result?.name, r.category, r.subcategory, r.benchName].join(" ").toLowerCase();
-      return blob.includes(q);
-    });
+    list = list.filter((r) =>
+      [r.result?.name, r.category, r.subcategory, r.benchName].join(" ").toLowerCase().includes(q)
+    );
   }
   if (has) {
-    list = list.filter(r => (r.ingredients || []).some(i => (i.name || "").toLowerCase().includes(has) || (i.id || "").toLowerCase() === has));
+    list = list.filter((r) =>
+      (r.ingredients || []).some(
+        (i) => (i.name || "").toLowerCase().includes(has) || (i.id || "").toLowerCase() === has
+      )
+    );
   }
-  const minP = Number(String(hoState.minProfit || "0").replace(/\s/g, "")) || 0;
-  const minR = Number(String(hoState.minRoi || "0").replace(",", ".")) || 0;
-  const budget = Number(String(hoState.budget || "").replace(/\s/g, ""));
 
-  const withCalc = list.map(r => {
-    const crafts = Math.max(1, Number(hoState.crafts[r.id]) || 1);
-    return { r, c: hoCalc(r, crafts), crafts };
+  const minP = Number(String(state.minProfit || "").replace(/\s/g, "")) || 0;
+  const minR = Number(String(state.minRoi || "").replace(",", ".")) || 0;
+  const budget = Number(String(state.budget || "").replace(/\s/g, ""));
+
+  const withCalc = list.map((r) => {
+    const crafts = Math.max(1, Number(state.crafts[r.id]) || 1);
+    return { r, c: calc(r, crafts), crafts };
   });
 
-  let filtered = withCalc;
-  if (minP > 0) filtered = filtered.filter(x => x.c.profitCash != null && x.c.profitCash >= minP);
-  if (minR > 0) filtered = filtered.filter(x => x.c.roi != null && x.c.roi >= minR);
-  if (Number.isFinite(budget) && budget > 0) filtered = filtered.filter(x => x.c.buyCost != null && x.c.buyCost <= budget);
+  let out = withCalc;
+  if (minP > 0) out = out.filter((x) => x.c.profit != null && x.c.profit >= minP);
+  if (minR > 0) out = out.filter((x) => x.c.roi != null && x.c.roi >= minR);
+  if (Number.isFinite(budget) && budget > 0)
+    out = out.filter((x) => x.c.buyCost != null && x.c.buyCost <= budget);
 
-  const sort = hoState.sort || "profit";
-  filtered.sort((a, b) => {
+  const sort = state.sort || "profit";
+  out.sort((a, b) => {
     if (sort === "name") return (a.r.result?.name || "").localeCompare(b.r.result?.name || "", "ru");
     if (sort === "cost") return (a.c.buyCost ?? 1e15) - (b.c.buyCost ?? 1e15);
     if (sort === "roi") {
-      const ar = a.c.roi === Infinity ? 1e12 : (a.c.roi ?? -1e12);
-      const br = b.c.roi === Infinity ? 1e12 : (b.c.roi ?? -1e12);
+      const ar = a.c.roi === Infinity ? 1e12 : a.c.roi ?? -1e12;
+      const br = b.c.roi === Infinity ? 1e12 : b.c.roi ?? -1e12;
       return br - ar;
     }
     if (sort === "liq") return (b.c.sales || 0) - (a.c.sales || 0);
-    return (b.c.profitCash ?? -1e15) - (a.c.profitCash ?? -1e15);
+    return (b.c.profit ?? -1e15) - (a.c.profit ?? -1e15);
   });
-  return filtered;
+  return out;
 }
 
-function hoHero(list) {
-  const box = document.getElementById("hoTop");
-  if (!box) return;
-  const good = list.filter(x => x.c.profitCash != null);
-  let bestRoi = null, bestFlip = null;
-  for (const x of good) {
-    if (x.c.roi != null && (bestRoi == null || (x.c.roi === Infinity ? 1e12 : x.c.roi) > (bestRoi.c.roi === Infinity ? 1e12 : bestRoi.c.roi))) bestRoi = x;
-    if (x.c.profitCash != null && (bestFlip == null || x.c.profitCash > bestFlip.c.profitCash)) bestFlip = x;
-  }
-  const roiTxt = bestRoi ? (bestRoi.c.roi === Infinity ? "∞" : Math.round(bestRoi.c.roi) + "%") : "—";
-  const flipTxt = bestFlip && bestFlip.c.profitCash != null
-    ? (bestFlip.c.profitCash >= 0 ? "+" : "") + Math.round(bestFlip.c.profitCash).toLocaleString("ru-RU")
-    : "—";
-  box.innerHTML = `
-    <div class="ho-hero">
-      <div class="ho-hero-left">
-        <div class="ho-hero-kicker">Калькулятор крафта · Убежище</div>
-        <div class="ho-hero-title">Самые <span>выгодные</span><br>крафты</div>
-        <div class="ho-hero-sub">Себестоимость, прибыль, ROI по живым ценам аукциона</div>
-      </div>
-      <div class="ho-hero-stats">
-        <div class="ho-hero-stat">
-          <div class="ho-hero-num pos">${esc(roiTxt)}</div>
-          <div class="sub">лучший ROI${bestRoi ? " · " + esc(bestRoi.r.result?.name || "") : ""}</div>
-        </div>
-        <div class="ho-hero-stat">
-          <div class="ho-hero-num pos">${esc(flipTxt)}</div>
-          <div class="sub">лучший флип${bestFlip ? " · " + esc(bestFlip.r.result?.name || "") : ""}</div>
-        </div>
-      </div>
-    </div>`;
-}
-
-function hoCardHtml(x, idx) {
+function cardHtml(x, idx) {
   const { r, c, crafts } = x;
-  const st = hoStatusLabel(c.status);
+  const st = statusLabel(c.status);
   const outAmt = r.result?.amount || 1;
-  const perk = hoPerkName(r);
-  const profitCls = c.profitCash > 0 ? "pos" : c.profitCash < 0 ? "neg" : "";
-  const liq = c.sales > 0 ? `≈${hoFmtN(c.sales)}/день` : "—";
-  const ings = (r.ingredients || []).map(ing => {
-    const pi = hoPrice(ing.id);
-    const priceStr = pi.price != null ? hoFmt(pi.price) : "—";
-    const need = (Number(ing.amount) || 0) * crafts;
-    return `<div class="ho-ing">
-      <span class="ho-ing-ico">${hoIconHtml(ing.id, ing.name)}</span>
-      <span class="ho-ing-q">${need}×</span>
-      <span class="ho-ing-n">${esc(ing.name)}</span>
-      <span class="ho-ing-p sub">${priceStr}</span>
-    </div>`;
-  }).join("");
+  const profitCls = c.profit > 0 ? "pos" : c.profit < 0 ? "neg" : "";
+  const ings = (r.ingredients || [])
+    .map((ing) => {
+      const pi = priceOf(ing.id);
+      const need = (Number(ing.amount) || 0) * crafts;
+      return `<div class="ho2-ing">
+        <span class="ho2-ing-ico">${iconHtml(ing.id, ing.name)}</span>
+        <span class="ho2-ing-txt"><b>${need}×</b> ${esc(ing.name)}</span>
+        <span class="ho2-ing-p">${fmtMoney(pi.price)}</span>
+      </div>`;
+    })
+    .join("");
 
-  return `<div class="ho-card-row ${st.cls}" data-ho-id="${esc(r.id)}">
-    <div class="ho-card-top">
-      <div class="ho-card-left">
-        <span class="ho-num">${idx + 1}</span>
-        <div class="ho-icon">${hoIconHtml(r.result?.id, r.result?.name)}</div>
-        <div class="ho-card-title">
-          <div class="ho-name"><b>${outAmt * crafts}×</b> «${esc(r.result?.name || r.id)}»</div>
-          <div class="sub">${esc(r.category || r.benchName)}${perk ? " · " + esc(perk) : ""}</div>
-          <button type="button" class="ho-qty-btn" data-ho-qty="${esc(r.id)}">Крафтов: ${crafts} ▾</button>
-        </div>
+  return `<article class="ho2-card ${st.cls}" data-id="${esc(r.id)}" style="grid-column: span 1">
+    <header class="ho2-card-h">
+      <span class="ho2-idx">${idx + 1}</span>
+      <div class="ho2-ico">${iconHtml(r.result?.id, r.result?.name)}</div>
+      <div class="ho2-titles">
+        <div class="ho2-name"><b>${outAmt * crafts}×</b> ${esc(r.result?.name || r.id)}</div>
+        <div class="ho2-sub">${esc(r.category || r.benchName)}</div>
+        <div class="ho2-perk">${esc(perkText(r) || r.benchName || "")}</div>
       </div>
-      <div class="ho-card-metrics">
-        <div class="ho-m"><span class="sub">Себест.</span><b>${hoFmt(c.buyCost)}</b></div>
-        <div class="ho-m"><span class="sub">Продажа</span><b>${hoFmt(c.gross)}</b></div>
-        <div class="ho-m"><span class="sub">Прибыль</span><b class="${profitCls}">${hoFmt(c.profitCash)}</b></div>
-        <div class="ho-m"><span class="sub">ROI</span><b class="${profitCls}">${c.roi === Infinity ? "∞" : (c.roi != null ? c.roi + "%" : "—")}</b></div>
-        <div class="ho-m"><span class="sub">Ликв.</span><span class="ho-liq">${liq}</span></div>
-      </div>
-    </div>
-    <div class="ho-card-ings">${ings || '<span class="sub">нет ингредиентов</span>'}</div>
-  </div>`;
+      <span class="ho2-badge ${st.cls}">${st.t}</span>
+    </header>
+    <div class="ho2-ings">${ings}</div>
+    <footer class="ho2-stats">
+      <div><span>Себест.</span><b>${fmtMoney(c.buyCost)}</b></div>
+      <div><span>Продажа</span><b>${fmtMoney(c.gross)}</b></div>
+      <div><span>Прибыль</span><b class="${profitCls}">${fmtMoney(c.profit)}</b></div>
+      <div><span>ROI</span><b class="${profitCls}">${c.roi === Infinity ? "∞" : c.roi != null ? c.roi + "%" : "—"}</b></div>
+    </footer>
+    <button type="button" class="ho2-qty" data-qty="${esc(r.id)}">Крафтов: ${crafts}</button>
+  </article>`;
 }
 
-function hoRenderGrid(list) {
+function renderList(list) {
   const box = document.getElementById("hoGrid");
   if (!box) return;
   if (!list.length) {
     box.innerHTML = `<div class="empty">Нет рецептов по фильтру</div>`;
     return;
   }
-  const html = list.slice(0, 150).map((x, i) => hoCardHtml(x, i)).join("");
-  box.innerHTML = `<div class="ho-cards-list">${html}</div>`;
+  // Явная сетка 3 колонки — без вложенных обёрток, которые ломали layout
+  box.className = "ho2-grid";
+  box.innerHTML = list.slice(0, 180).map((x, i) => cardHtml(x, i)).join("");
 
-  box.querySelectorAll(".ho-card-row").forEach(el => {
-    el.addEventListener("click", e => {
-      if (e.target.closest("[data-ho-qty]")) return;
-      const id = el.dataset.hoId;
-      hoState.selected = id; hoSave(); hoShowDetail(id);
+  box.querySelectorAll(".ho2-card").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-qty]")) return;
+      state.selected = el.dataset.id;
+      save();
+      openModal(el.dataset.id);
     });
   });
-  box.querySelectorAll("[data-ho-qty]").forEach(btn => {
-    btn.addEventListener("click", e => {
+  box.querySelectorAll("[data-qty]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const id = btn.dataset.hoQty;
-      const cur = Math.max(1, Number(hoState.crafts[id]) || 1);
+      const id = btn.dataset.qty;
+      const cur = Math.max(1, Number(state.crafts[id]) || 1);
       const next = prompt("Сколько крафтов?", String(cur));
       if (next == null) return;
-      const v = Math.max(1, Math.floor(Number(String(next).replace(/\s/g, "")) || 1));
-      hoState.crafts[id] = v; hoSave(); renderHideout();
+      state.crafts[id] = Math.max(1, Math.floor(Number(String(next).replace(/\s/g, "")) || 1));
+      save();
+      renderHideout();
     });
   });
 }
 
-function hoShowDetail(id) {
-  const box = document.getElementById("hoDetail");
+function renderHero(list) {
+  const box = document.getElementById("hoTop");
   if (!box) return;
-  const recipe = hoRecipes.find(r => r.id === id);
-  if (!recipe) { box.style.display = "none"; return; }
-  const crafts = Math.max(1, Number(hoState.crafts[id]) || 1);
-  const c = hoCalc(recipe, crafts);
-  const st = hoStatusLabel(c.status);
+  let bestRoi = null;
+  let bestFlip = null;
+  for (const x of list) {
+    if (x.c.roi == null) continue;
+    const rv = x.c.roi === Infinity ? 1e12 : x.c.roi;
+    if (!bestRoi || rv > (bestRoi.c.roi === Infinity ? 1e12 : bestRoi.c.roi)) bestRoi = x;
+    if (x.c.profit != null && (!bestFlip || x.c.profit > bestFlip.c.profit)) bestFlip = x;
+  }
+  const roiTxt = bestRoi ? (bestRoi.c.roi === Infinity ? "∞" : Math.round(bestRoi.c.roi) + "%") : "—";
+  const flipTxt =
+    bestFlip && bestFlip.c.profit != null
+      ? (bestFlip.c.profit >= 0 ? "+" : "") + Math.round(bestFlip.c.profit).toLocaleString("ru-RU")
+      : "—";
+  box.innerHTML = `<div class="ho2-hero">
+    <div>
+      <div class="ho2-hero-k">Калькулятор крафта · Убежище</div>
+      <div class="ho2-hero-t">Самые <em>выгодные</em> крафты</div>
+    </div>
+    <div class="ho2-hero-stats">
+      <div><strong class="pos">${esc(roiTxt)}</strong><span>лучший ROI</span></div>
+      <div><strong class="pos">${esc(flipTxt)}</strong><span>лучший флип</span></div>
+    </div>
+  </div>`;
+}
+
+function openModal(id) {
+  const recipe = recipes.find((r) => r.id === id);
+  if (!recipe) return;
+  const crafts = Math.max(1, Number(state.crafts[id]) || 1);
+  const c = calc(recipe, crafts);
+  const st = statusLabel(c.status);
   const outId = recipe.result?.id;
 
-  const linesHtml = c.lines.map(l => `
-    <tr>
-      <td class="ho-res-cell"><span class="ho-ing-ico">${hoIconHtml(l.id, l.name)}</span><span>${esc(l.name)}</span></td>
-      <td>${l.need}</td>
-      <td><input type="text" inputmode="numeric" data-ho-stock="${esc(l.id)}" value="${l.own || ""}" placeholder="0" style="width:56px"></td>
-      <td>${l.toBuy}</td>
-      <td><input type="text" inputmode="decimal" data-ho-price="${esc(l.id)}" value="${hoState.manualPrice[l.id] ?? (l.unit != null ? l.unit : "")}" placeholder="авто" style="width:80px"></td>
-      <td class="sub">${l.source === "market" ? "аукцион" : l.source === "manual" ? "ручная" : "нет"}</td>
-      <td>${hoFmt(l.lineBuy)}</td>
-    </tr>`).join("");
-
-  // modal overlay — stay in place, no jump to bottom
   let overlay = document.getElementById("hoOverlay");
   if (!overlay) {
     overlay = document.createElement("div");
     overlay.id = "hoOverlay";
-    overlay.className = "ho-overlay";
+    overlay.className = "ho2-overlay";
     document.body.appendChild(overlay);
   }
-  overlay.style.display = "flex";
-  document.body.classList.add("ho-modal-open");
-  const closeModal = () => {
+
+  const close = () => {
     overlay.style.display = "none";
     document.body.classList.remove("ho-modal-open");
-    hoState.selected = null;
-    hoSave();
+    state.selected = null;
+    save();
   };
-  overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
 
-  box.style.display = "none"; // detail panel in-page no longer used
-  overlay.innerHTML = `<div class="ho-modal" role="dialog">
-    <div class="ho-detail-head">
-      <button type="button" class="btn" id="hoDetailClose">✕</button>
-      <div class="ho-icon" style="width:40px;height:40px">${hoIconHtml(recipe.result?.id, recipe.result?.name)}</div>
-      <div class="ho-name">${esc(recipe.result?.name || id)}</div>
-      <span class="ho-badge ${st.cls}">${st.t}</span>
+  const chips = (recipe.ingredients || [])
+    .map((ing) => {
+      const need = (Number(ing.amount) || 0) * crafts;
+      return `<div class="ho2-chip">
+        <div class="ho2-chip-ico">${iconHtml(ing.id, ing.name)}</div>
+        <div class="ho2-chip-q">${need}×</div>
+        <div class="ho2-chip-n">${esc(ing.name)}</div>
+      </div>`;
+    })
+    .join('<span class="ho2-plus">+</span>');
+
+  const lines = c.lines
+    .map(
+      (l) => `<tr>
+      <td class="ho2-td-name"><span class="ho2-ing-ico">${iconHtml(l.id, l.name)}</span>${esc(l.name)}</td>
+      <td>${l.need}</td>
+      <td><input data-stock="${esc(l.id)}" value="${l.own || ""}" placeholder="0"></td>
+      <td>${l.toBuy}</td>
+      <td><input data-price="${esc(l.id)}" value="${state.manualPrice[l.id] ?? (l.unit != null ? l.unit : "")}" placeholder="авто"></td>
+      <td>${fmtMoney(l.sum)}</td>
+    </tr>`
+    )
+    .join("");
+
+  overlay.style.display = "flex";
+  document.body.classList.add("ho-modal-open");
+  overlay.onclick = (e) => {
+    if (e.target === overlay) close();
+  };
+
+  overlay.innerHTML = `<div class="ho2-modal" role="dialog">
+    <div class="ho2-modal-h">
+      <button type="button" class="btn" id="hoClose">✕</button>
+      <div class="ho2-ico">${iconHtml(recipe.result?.id, recipe.result?.name)}</div>
+      <div>
+        <div class="ho2-name">${esc(recipe.result?.name || id)}</div>
+        <div class="ho2-sub">${esc(recipe.benchName)} · ${esc(recipe.category)} · ${esc(perkText(recipe))}</div>
+      </div>
+      <span class="ho2-badge ${st.cls}">${st.t}</span>
     </div>
-    <div class="sub" style="margin:6px 0">${esc(recipe.benchName)} · ${esc(recipe.category)}${recipe.subcategory ? " · " + esc(recipe.subcategory) : ""} · ${esc(hoPerkName(recipe))} · энергия ${recipe.energy || 0}</div>
-    <div class="ho-recipe-visual">
-      ${(recipe.ingredients||[]).map(ing => {
-        const need = (Number(ing.amount)||0) * crafts;
-        return `<div class="ho-rv-item">
-          <div class="ho-rv-icon">${hoIconHtml(ing.id, ing.name)}</div>
-          <div class="ho-rv-q">${need}×</div>
-          <div class="ho-rv-name">${esc(ing.name)}</div>
-        </div>`;
-      }).join('<div class="ho-rv-plus">+</div>')}
-      <div class="ho-rv-plus">→</div>
-      <div class="ho-rv-item ho-rv-out">
-        <div class="ho-rv-icon">${hoIconHtml(recipe.result?.id, recipe.result?.name)}</div>
-        <div class="ho-rv-q">${c.outQty}×</div>
-        <div class="ho-rv-name">${esc(recipe.result?.name || id)}</div>
+    <div class="ho2-recipe-line">
+      ${chips}
+      <span class="ho2-plus">→</span>
+      <div class="ho2-chip out">
+        <div class="ho2-chip-ico">${iconHtml(recipe.result?.id, recipe.result?.name)}</div>
+        <div class="ho2-chip-q">${c.outQty}×</div>
+        <div class="ho2-chip-n">${esc(recipe.result?.name || id)}</div>
       </div>
     </div>
-    <div class="ho-detail-controls">
-      <label>Крафтов <input id="hoCrafts" type="text" inputmode="numeric" value="${crafts}" style="width:64px"></label>
-      <label>Цена продажи / шт. <input id="hoSell" type="text" inputmode="decimal" value="${hoState.manualPrice[outId] ?? (c.sellUnit != null ? c.sellUnit : "")}" placeholder="авто" style="width:90px"></label>
-      <span class="sub">выход: ${c.outQty} шт.</span>
+    <div class="ho2-modal-ctrl">
+      <label>Крафтов <input id="hoCrafts" value="${crafts}" inputmode="numeric"></label>
+      <label>Цена продажи/шт <input id="hoSell" value="${state.manualPrice[outId] ?? (c.sellUnit != null ? c.sellUnit : "")}" placeholder="авто" inputmode="decimal"></label>
     </div>
-    <div class="ho-detail-stats">
-      <div><span class="sub">Себестоимость</span><b>${hoFmt(c.buyCost)}</b></div>
-      <div><span class="sub">Выручка</span><b>${hoFmt(c.gross)}</b></div>
-      <div><span class="sub">Комиссия 5%</span><b>${hoFmt(c.fee)}</b></div>
-      <div><span class="sub">Чистая прибыль</span><b class="${c.profitCash > 0 ? "pos" : c.profitCash < 0 ? "neg" : ""}">${hoFmt(c.profitCash)}</b></div>
-      <div><span class="sub">ROI</span><b>${c.roi === Infinity ? "∞" : (c.roi != null ? c.roi + "%" : "—")}</b></div>
-      <div><span class="sub">Безубыток / шт.</span><b>${hoFmt(c.breakEven)}</b></div>
+    <div class="ho2-modal-stats">
+      <div><span>Себестоимость</span><b>${fmtMoney(c.buyCost)}</b></div>
+      <div><span>Выручка</span><b>${fmtMoney(c.gross)}</b></div>
+      <div><span>Комиссия 5%</span><b>${fmtMoney(c.fee)}</b></div>
+      <div><span>Прибыль</span><b class="${c.profit > 0 ? "pos" : c.profit < 0 ? "neg" : ""}">${fmtMoney(c.profit)}</b></div>
+      <div><span>ROI</span><b>${c.roi === Infinity ? "∞" : c.roi != null ? c.roi + "%" : "—"}</b></div>
     </div>
-    <div class="section">Ресурсы</div>
-    <div class="table-scroll"><table class="mini ho-table">
-      <thead><tr><th>Ресурс</th><th>Нужно</th><th>Есть</th><th>Купить</th><th>Цена/шт</th><th>Источник</th><th>Сумма</th></tr></thead>
-      <tbody>${linesHtml}</tbody>
+    <div class="table-scroll"><table class="ho2-table">
+      <thead><tr><th>Ресурс</th><th>Нужно</th><th>Есть</th><th>Купить</th><th>Цена</th><th>Сумма</th></tr></thead>
+      <tbody>${lines}</tbody>
     </table></div>
   </div>`;
 
-  document.getElementById("hoDetailClose").onclick = (e) => { e.stopPropagation(); closeModal(); };
+  document.getElementById("hoClose").onclick = (e) => {
+    e.stopPropagation();
+    close();
+  };
   document.getElementById("hoCrafts").oninput = (e) => {
-    const v = Math.max(1, Math.floor(Number(String(e.target.value).replace(/\s/g, "")) || 1));
-    hoState.crafts[id] = v; hoSave(); hoShowDetail(id);
+    state.crafts[id] = Math.max(1, Math.floor(Number(String(e.target.value).replace(/\s/g, "")) || 1));
+    save();
+    openModal(id);
   };
   document.getElementById("hoSell").oninput = (e) => {
+    if (!outId) return;
     const raw = e.target.value.trim();
-    if (outId) {
-      if (raw === "") delete hoState.manualPrice[outId];
-      else hoState.manualPrice[outId] = raw;
-      hoSave(); hoShowDetail(id);
-    }
+    if (raw === "") delete state.manualPrice[outId];
+    else state.manualPrice[outId] = raw;
+    save();
+    openModal(id);
   };
-  overlay.querySelectorAll("[data-ho-stock]").forEach(inp => {
+  overlay.querySelectorAll("[data-stock]").forEach((inp) => {
     inp.oninput = () => {
-      const iid = inp.dataset.hoStock;
       const v = String(inp.value).replace(/\s/g, "");
-      if (v === "") delete hoState.stock[iid]; else hoState.stock[iid] = Number(v) || 0;
-      hoSave(); hoShowDetail(id);
+      if (v === "") delete state.stock[inp.dataset.stock];
+      else state.stock[inp.dataset.stock] = Number(v) || 0;
+      save();
+      openModal(id);
     };
   });
-  overlay.querySelectorAll("[data-ho-price]").forEach(inp => {
+  overlay.querySelectorAll("[data-price]").forEach((inp) => {
     inp.oninput = () => {
-      const iid = inp.dataset.hoPrice;
       const raw = inp.value.trim();
-      if (raw === "") delete hoState.manualPrice[iid]; else hoState.manualPrice[iid] = raw;
-      hoSave(); hoShowDetail(id);
+      if (raw === "") delete state.manualPrice[inp.dataset.price];
+      else state.manualPrice[inp.dataset.price] = raw;
+      save();
+      openModal(id);
     };
   });
-  // Escape to close
-  const onKey = (e) => { if (e.key === "Escape") { closeModal(); document.removeEventListener("keydown", onKey); } };
-  document.addEventListener("keydown", onKey);
 }
 
-function hoFillCats() {
+function fillCats() {
   const sel = document.getElementById("hoCat");
   if (!sel) return;
-  const cur = hoState.cat || "";
-  const cats = [...new Set(hoRecipes.map(r => r.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
-  sel.innerHTML = `<option value="">Все категории</option>` + cats.map(c =>
-    `<option value="${esc(c)}"${c === cur ? " selected" : ""}>${esc(c)}</option>`
-  ).join("");
+  const cur = state.cat || "";
+  const cats = [...new Set(recipes.map((r) => r.category).filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b, "ru")
+  );
+  sel.innerHTML =
+    `<option value="">любая</option>` +
+    cats.map((c) => `<option value="${esc(c)}"${c === cur ? " selected" : ""}>${esc(c)}</option>`).join("");
 }
 
 async function renderHideout() {
   const st = document.getElementById("hoStatus");
-  if (st) st.textContent = "Загрузка рецептов…";
+  if (st) st.textContent = "Загрузка…";
   try {
-    await hoLoadRecipes();
-    if (!hoRecipes.length) {
-      if (st) st.textContent = "Не удалось загрузить рецепты";
-      const grid = document.getElementById("hoGrid");
-      if (grid) grid.innerHTML = `<div class="empty">Файл hideout_recipes.json не найден. npm run build и перезапуск сервера.</div>`;
+    try {
+      if (typeof rows !== "undefined") window.rows = rows;
+    } catch {}
+    await loadRecipes();
+    if (!recipes.length) {
+      if (st) st.textContent = "Рецепты не загрузились";
+      const g = document.getElementById("hoGrid");
+      if (g) g.innerHTML = `<div class="empty">Нет hideout_recipes.json</div>`;
       return;
     }
-    hoFillCats();
-    const q = document.getElementById("hoQ"); if (q) q.value = hoState.q || "";
-    const has = document.getElementById("hoHas"); if (has) has.value = hoState.hasItem || "";
-    const bench = document.getElementById("hoBench"); if (bench) bench.value = hoState.bench || "";
-    const cat = document.getElementById("hoCat"); if (cat) cat.value = hoState.cat || "";
-    const sort = document.getElementById("hoSort"); if (sort) sort.value = hoState.sort || "profit";
-    const mp = document.getElementById("hoMinProfit"); if (mp) mp.value = hoState.minProfit || "";
-    const mr = document.getElementById("hoMinRoi"); if (mr) mr.value = hoState.minRoi || "";
-    const bud = document.getElementById("hoBudget"); if (bud) bud.value = hoState.budget || "";
+    if (st) st.textContent = "Цены…";
+    await loadPrices();
+    fillCats();
 
-    const list = hoFiltered();
-    if (st) st.textContent = `Рецептов: ${list.length} / ${hoRecipes.length}`;
+    const setVal = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.value = v ?? "";
+    };
+    setVal("hoQ", state.q);
+    setVal("hoHas", state.has);
+    setVal("hoBench", state.bench);
+    setVal("hoCat", state.cat);
+    setVal("hoSort", state.sort);
+    setVal("hoMinProfit", state.minProfit);
+    setVal("hoMinRoi", state.minRoi);
+    setVal("hoBudget", state.budget);
+
+    const list = filtered();
+    if (st) st.textContent = `Рецептов: ${list.length} / ${recipes.length} · цен в кэше: ${Object.keys(priceMap).length}`;
     const up = document.getElementById("hoUpdated");
-    if (up) up.textContent = "цены с вашего аукциона";
-    hoHero(list);
-    hoRenderGrid(list);
-    if (hoState.selected) hoShowDetail(hoState.selected);
+    if (up) up.textContent = "цены: лоты + продажи из БД";
+
+    renderHero(list);
+    renderList(list);
+
+    if (state.selected) openModal(state.selected);
     else {
-      const d = document.getElementById("hoDetail"); if (d) d.style.display = "none";
       const ov = document.getElementById("hoOverlay");
-      if (ov) { ov.style.display = "none"; document.body.classList.remove("ho-modal-open"); }
+      if (ov) {
+        ov.style.display = "none";
+        document.body.classList.remove("ho-modal-open");
+      }
     }
   } catch (e) {
-    console.error("renderHideout", e);
-    if (st) st.textContent = "Ошибка: " + (e && e.message ? e.message : e);
+    console.error(e);
+    if (st) st.textContent = "Ошибка: " + (e.message || e);
   }
 }
 
-function hoBindOnce() {
-  if (window._hoBound) return;
-  window._hoBound = true;
-  const bind = (id, ev, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(ev, fn); };
-  bind("hoQ", "input", () => {
-    clearTimeout(window._hoQT);
-    window._hoQT = setTimeout(() => { hoState.q = document.getElementById("hoQ")?.value || ""; hoSave(); renderHideout(); }, 120);
+function bindOnce() {
+  if (window._ho2bound) return;
+  window._ho2bound = true;
+  const on = (id, ev, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(ev, fn);
+  };
+  const refresh = () => {
+    save();
+    renderHideout();
+  };
+  on("hoQ", "input", () => {
+    clearTimeout(window._ho2q);
+    window._ho2q = setTimeout(() => {
+      state.q = document.getElementById("hoQ")?.value || "";
+      refresh();
+    }, 150);
   });
-  bind("hoHas", "input", () => {
-    clearTimeout(window._hoHT);
-    window._hoHT = setTimeout(() => { hoState.hasItem = document.getElementById("hoHas")?.value || ""; hoSave(); renderHideout(); }, 120);
+  on("hoHas", "input", () => {
+    clearTimeout(window._ho2h);
+    window._ho2h = setTimeout(() => {
+      state.has = document.getElementById("hoHas")?.value || "";
+      refresh();
+    }, 150);
   });
-  bind("hoBench", "change", () => { hoState.bench = document.getElementById("hoBench").value; hoSave(); renderHideout(); });
-  bind("hoCat", "change", () => { hoState.cat = document.getElementById("hoCat").value; hoSave(); renderHideout(); });
-  bind("hoSort", "change", () => { hoState.sort = document.getElementById("hoSort").value; hoSave(); renderHideout(); });
-  bind("hoMinProfit", "change", () => { hoState.minProfit = document.getElementById("hoMinProfit").value; hoSave(); renderHideout(); });
-  bind("hoMinRoi", "change", () => { hoState.minRoi = document.getElementById("hoMinRoi").value; hoSave(); renderHideout(); });
-  bind("hoBudget", "change", () => { hoState.budget = document.getElementById("hoBudget").value; hoSave(); renderHideout(); });
-  bind("hoRefresh", "click", () => renderHideout());
-  bind("hoReset", "click", () => {
-    hoState.q = ""; hoState.hasItem = ""; hoState.bench = ""; hoState.cat = "";
-    hoState.minProfit = 0; hoState.minRoi = 0; hoState.budget = "";
-    hoSave(); renderHideout();
+  on("hoBench", "change", () => {
+    state.bench = document.getElementById("hoBench").value;
+    refresh();
+  });
+  on("hoCat", "change", () => {
+    state.cat = document.getElementById("hoCat").value;
+    refresh();
+  });
+  on("hoSort", "change", () => {
+    state.sort = document.getElementById("hoSort").value;
+    refresh();
+  });
+  on("hoMinProfit", "change", () => {
+    state.minProfit = document.getElementById("hoMinProfit").value;
+    refresh();
+  });
+  on("hoMinRoi", "change", () => {
+    state.minRoi = document.getElementById("hoMinRoi").value;
+    refresh();
+  });
+  on("hoBudget", "change", () => {
+    state.budget = document.getElementById("hoBudget").value;
+    refresh();
+  });
+  on("hoRefresh", "click", async () => {
+    priceAt = 0;
+    await loadPrices();
+    renderHideout();
+  });
+  on("hoReset", "click", () => {
+    state.q = "";
+    state.has = "";
+    state.bench = "";
+    state.cat = "";
+    state.minProfit = "";
+    state.minRoi = "";
+    state.budget = "";
+    refresh();
   });
 }
 
 window.renderHideout = renderHideout;
-window.hoBindOnce = hoBindOnce;
+window.hoBindOnce = bindOnce;

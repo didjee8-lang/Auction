@@ -774,3 +774,145 @@ body.ho-modal-open{overflow:hidden}
   border-top:1px solid rgba(58,26,26,.5);
 }
 .ho-card-ings .ho-ing{margin:0}
+
+
+/* ========== УБЕЖИЩЕ v2 — сетка 3 колонки ========== */
+#hideoutPane{width:100%!important;max-width:100%!important;box-sizing:border-box}
+#hideoutPane .ho-table-wrap{display:none!important}
+#hoGrid.ho2-grid,
+#hoGrid.ho-grid,
+#hoGrid{
+  display:grid!important;
+  grid-template-columns:repeat(3, minmax(0, 1fr))!important;
+  gap:10px!important;
+  width:100%!important;
+  max-width:100%!important;
+  box-sizing:border-box;
+  align-content:start;
+}
+#hoGrid > .ho2-card{
+  width:100%!important;
+  max-width:100%!important;
+  min-width:0!important;
+  box-sizing:border-box;
+  margin:0!important;
+}
+@media (max-width: 1000px){
+  #hoGrid.ho2-grid,#hoGrid.ho-grid,#hoGrid{
+    grid-template-columns:repeat(2, minmax(0, 1fr))!important;
+  }
+}
+@media (max-width: 560px){
+  #hoGrid.ho2-grid,#hoGrid.ho-grid,#hoGrid{
+    grid-template-columns:1fr!important;
+  }
+}
+
+.ho2-card{
+  background:var(--card,#0e0e0e);
+  border:1px solid var(--border,#3a1a1a);
+  border-radius:12px;
+  padding:10px;
+  cursor:pointer;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  transition:border-color .12s, background .12s;
+}
+.ho2-card:hover{border-color:rgba(255,42,42,.4)}
+.ho2-card.good{border-left:3px solid var(--green,#4ade80)}
+.ho2-card.bad{border-left:3px solid var(--red,#ff2a2a)}
+.ho2-card.nodata{border-left:3px solid #555}
+.ho2-card.edge{border-left:3px solid var(--yellow,#fbbf24)}
+
+.ho2-card-h{display:flex;gap:8px;align-items:flex-start}
+.ho2-idx{font-size:11px;color:var(--muted);min-width:16px;padding-top:2px}
+.ho2-ico{
+  width:42px;height:42px;border-radius:8px;flex-shrink:0;
+  background:var(--panel,#080808);border:1px solid var(--border,#3a1a1a);
+  position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;
+}
+.ho2-ico img{width:100%;height:100%;object-fit:contain}
+.ho2-ph{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:700;color:var(--muted);background:var(--panel,#080808);
+}
+.ho2-titles{flex:1;min-width:0}
+.ho2-name{font-size:13px;font-weight:600;line-height:1.25;word-break:break-word}
+.ho2-sub{font-size:11px;color:var(--muted);margin-top:2px}
+.ho2-perk{font-size:10px;color:var(--neon2,#ff6b6b);margin-top:2px}
+.ho2-badge{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;white-space:nowrap;align-self:flex-start}
+.ho2-badge.good{background:rgba(74,222,128,.15);color:var(--green,#4ade80)}
+.ho2-badge.bad{background:rgba(255,42,42,.12);color:var(--red,#ff2a2a)}
+.ho2-badge.nodata{background:rgba(100,100,100,.2);color:var(--muted)}
+.ho2-badge.edge{background:rgba(251,191,36,.12);color:var(--yellow,#fbbf24)}
+
+.ho2-ings{display:flex;flex-direction:column;gap:4px;flex:1}
+.ho2-ing{display:flex;align-items:center;gap:6px;font-size:11px}
+.ho2-ing-ico{
+  width:22px;height:22px;border-radius:5px;flex-shrink:0;position:relative;
+  background:var(--panel);border:1px solid var(--border);overflow:hidden;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.ho2-ing-ico img{width:100%;height:100%;object-fit:contain}
+.ho2-ing-ico .ho2-ph{font-size:9px}
+.ho2-ing-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ho2-ing-p{color:var(--muted);white-space:nowrap}
+
+.ho2-stats{
+  display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;
+  padding-top:6px;border-top:1px solid rgba(58,26,26,.5);font-size:11px;
+}
+.ho2-stats span{display:block;font-size:9px;color:var(--muted);text-transform:uppercase}
+.ho2-stats b.pos{color:var(--green,#4ade80)}
+.ho2-stats b.neg{color:var(--red,#ff2a2a)}
+.ho2-qty{
+  align-self:flex-start;font-size:11px;padding:4px 8px;border-radius:6px;
+  border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer;
+}
+.ho2-qty:hover{border-color:var(--neon,#ff2a2a);color:var(--neon2)}
+
+.ho2-hero{
+  display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;
+  margin-bottom:12px;padding:12px;background:var(--panel);border:1px solid var(--border);border-radius:12px;
+}
+.ho2-hero-k{font-size:11px;color:var(--muted)}
+.ho2-hero-t{font-size:20px;font-weight:800;margin-top:4px}
+.ho2-hero-t em{color:var(--neon2,#ff6b6b);font-style:normal}
+.ho2-hero-stats{display:flex;gap:20px}
+.ho2-hero-stats strong{display:block;font-size:24px}
+.ho2-hero-stats span{font-size:11px;color:var(--muted)}
+.pos{color:var(--green,#4ade80)}
+
+.ho2-overlay{
+  position:fixed;inset:0;z-index:90;display:none;
+  align-items:center;justify-content:center;
+  background:rgba(0,0,0,.75);padding:12px;
+}
+.ho2-modal{
+  width:min(960px,98vw);max-height:92vh;overflow:auto;
+  background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px 16px;
+  box-shadow:0 20px 60px rgba(0,0,0,.8);
+}
+.ho2-modal-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.ho2-recipe-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px;background:var(--bg);border-radius:10px;border:1px solid var(--border)}
+.ho2-chip{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:56px;max-width:80px;text-align:center}
+.ho2-chip-ico{width:40px;height:40px;border-radius:8px;background:var(--panel);border:1px solid var(--border);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.ho2-chip-ico img{width:100%;height:100%;object-fit:contain}
+.ho2-chip-q{font-size:12px;font-weight:700;color:var(--neon2)}
+.ho2-chip-n{font-size:10px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80px}
+.ho2-chip.out .ho2-chip-ico{border-color:var(--neon);box-shadow:0 0 8px var(--glow,rgba(255,42,42,.3))}
+.ho2-plus{font-size:16px;font-weight:700;color:var(--muted)}
+.ho2-modal-ctrl{display:flex;flex-wrap:wrap;gap:12px;margin:8px 0;font-size:12px}
+.ho2-modal-ctrl input{width:72px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:4px}
+.ho2-modal-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin:8px 0}
+.ho2-modal-stats span{display:block;font-size:10px;color:var(--muted)}
+.ho2-table{width:100%;border-collapse:collapse;font-size:12px}
+.ho2-table th,.ho2-table td{padding:6px;border-bottom:1px solid var(--border);text-align:left}
+.ho2-table input{width:64px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:3px 5px;border-radius:4px}
+.ho2-td-name{display:flex;align-items:center;gap:6px}
+body.ho-modal-open{overflow:hidden}
+
+/* kill old single-column rules that forced 1 col */
+.ho-cards-list{display:contents!important}
+.ho-card-row{display:none!important}
