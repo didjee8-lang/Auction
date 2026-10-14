@@ -231,45 +231,46 @@ function hoHero(list) {
     </div>`;
 }
 
-function hoRowHtml(x, idx) {
+function hoCardHtml(x, idx) {
   const { r, c, crafts } = x;
   const st = hoStatusLabel(c.status);
   const outAmt = r.result?.amount || 1;
   const perk = hoPerkName(r);
+  const profitCls = c.profitCash > 0 ? "pos" : c.profitCash < 0 ? "neg" : "";
+  const liq = c.sales > 0 ? `≈${hoFmtN(c.sales)}/день` : "—";
   const ings = (r.ingredients || []).map(ing => {
     const pi = hoPrice(ing.id);
     const priceStr = pi.price != null ? hoFmt(pi.price) : "—";
+    const need = (Number(ing.amount) || 0) * crafts;
     return `<div class="ho-ing">
       <span class="ho-ing-ico">${hoIconHtml(ing.id, ing.name)}</span>
-      <span class="ho-ing-q">${ing.amount * crafts}×</span>
+      <span class="ho-ing-q">${need}×</span>
       <span class="ho-ing-n">${esc(ing.name)}</span>
       <span class="ho-ing-p sub">${priceStr}</span>
     </div>`;
   }).join("");
 
-  const profitCls = c.profitCash > 0 ? "pos" : c.profitCash < 0 ? "neg" : "";
-  const liq = c.sales > 0 ? `≈${hoFmtN(c.sales)}/день` : "—";
-
-  return `<tr class="ho-row ${st.cls}" data-ho-id="${esc(r.id)}">
-    <td class="ho-num">${idx + 1}</td>
-    <td class="ho-result">
-      <div class="ho-res-main">
+  return `<div class="ho-card-row ${st.cls}" data-ho-id="${esc(r.id)}">
+    <div class="ho-card-top">
+      <div class="ho-card-left">
+        <span class="ho-num">${idx + 1}</span>
         <div class="ho-icon">${hoIconHtml(r.result?.id, r.result?.name)}</div>
-        <div>
+        <div class="ho-card-title">
           <div class="ho-name"><b>${outAmt * crafts}×</b> «${esc(r.result?.name || r.id)}»</div>
-          <div class="sub">${esc(r.category || r.benchName)}</div>
-          ${perk ? `<div class="ho-perk">${esc(perk)}</div>` : ""}
+          <div class="sub">${esc(r.category || r.benchName)}${perk ? " · " + esc(perk) : ""}</div>
           <button type="button" class="ho-qty-btn" data-ho-qty="${esc(r.id)}">Крафтов: ${crafts} ▾</button>
         </div>
       </div>
-    </td>
-    <td class="ho-ings">${ings || "—"}</td>
-    <td class="ho-cell">${hoFmt(c.buyCost)}</td>
-    <td class="ho-cell">${hoFmt(c.gross)}</td>
-    <td class="ho-cell ${profitCls}"><b>${hoFmt(c.profitCash)}</b></td>
-    <td class="ho-cell ${profitCls}">${c.roi === Infinity ? "∞" : (c.roi != null ? c.roi + "%" : "—")}</td>
-    <td class="ho-cell"><span class="ho-liq">${liq}</span></td>
-  </tr>`;
+      <div class="ho-card-metrics">
+        <div class="ho-m"><span class="sub">Себест.</span><b>${hoFmt(c.buyCost)}</b></div>
+        <div class="ho-m"><span class="sub">Продажа</span><b>${hoFmt(c.gross)}</b></div>
+        <div class="ho-m"><span class="sub">Прибыль</span><b class="${profitCls}">${hoFmt(c.profitCash)}</b></div>
+        <div class="ho-m"><span class="sub">ROI</span><b class="${profitCls}">${c.roi === Infinity ? "∞" : (c.roi != null ? c.roi + "%" : "—")}</b></div>
+        <div class="ho-m"><span class="sub">Ликв.</span><span class="ho-liq">${liq}</span></div>
+      </div>
+    </div>
+    <div class="ho-card-ings">${ings || '<span class="sub">нет ингредиентов</span>'}</div>
+  </div>`;
 }
 
 function hoRenderGrid(list) {
@@ -279,19 +280,13 @@ function hoRenderGrid(list) {
     box.innerHTML = `<div class="empty">Нет рецептов по фильтру</div>`;
     return;
   }
-  const rows = list.slice(0, 150).map((x, i) => hoRowHtml(x, i)).join("");
-  box.innerHTML = `<div class="ho-table-wrap"><table class="ho-table-main">
-    <thead><tr>
-      <th>#</th><th>Итог</th><th>Ингредиенты</th>
-      <th>Себестоимость</th><th>Цена продажи</th><th>Прибыль</th><th>ROI %</th><th>Ликвидность</th>
-    </tr></thead>
-    <tbody>${rows}</tbody>
-  </table></div>`;
+  const html = list.slice(0, 150).map((x, i) => hoCardHtml(x, i)).join("");
+  box.innerHTML = `<div class="ho-cards-list">${html}</div>`;
 
-  box.querySelectorAll("tr.ho-row").forEach(tr => {
-    tr.addEventListener("click", e => {
+  box.querySelectorAll(".ho-card-row").forEach(el => {
+    el.addEventListener("click", e => {
       if (e.target.closest("[data-ho-qty]")) return;
-      const id = tr.dataset.hoId;
+      const id = el.dataset.hoId;
       hoState.selected = id; hoSave(); hoShowDetail(id);
     });
   });

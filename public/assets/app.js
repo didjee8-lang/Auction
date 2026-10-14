@@ -1767,9 +1767,9 @@ function showRightTab(tab){
   if($("perekupPane")) $("perekupPane").style.display=tab==="perekup"?"block":"none";
   if($("dealsPane")) $("dealsPane").style.display=tab==="deals"?"block":"none";
   if($("hideoutPane")) $("hideoutPane").style.display=tab==="hideout"?"block":"none";
-  // Убежище — на всю ширину (таблица крафтов как stalfarm)
+  // Убежище остаётся в правой панели
   const main=document.querySelector(".main");
-  if(main) main.classList.toggle("main-hideout", tab==="hideout");
+  if(main) main.classList.remove("main-hideout");
   try{ window.rows=rows; }catch{}
   if(tab==="catalog") renderCatalog();
   if(tab==="calc") renderCalc();

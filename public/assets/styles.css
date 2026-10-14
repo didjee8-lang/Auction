@@ -63,9 +63,7 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .drawer-fav{background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-size:16px;padding:4px 8px;border-radius:6px;margin-right:4px;transition:color .15s,border-color .15s,box-shadow .15s}
 .drawer-fav.on{color:var(--neon);border-color:var(--neon);box-shadow:0 0 10px var(--glow)}
 .main{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0;overflow:hidden}
-.main.main-hideout{grid-template-columns:0 1fr}
-.main.main-hideout > .pane:first-child{display:none;width:0;min-width:0;overflow:hidden;border:none}
-.main.main-hideout > .pane:last-child{border-right:none}
+/* hideout stays in right pane */
 #hideoutPane{width:100%;max-width:100%}
 #hideoutPane .ho-table-wrap{width:100%;overflow-x:auto}
 #hideoutPane .ho-table-main{width:100%;table-layout:auto}
@@ -732,3 +730,35 @@ body.ho-modal-open{overflow:hidden}
   .ho-overlay{padding:16px 24px}
   .ho-modal{width:min(1200px,96vw)}
 }
+
+/* Убежище — карточки на всю ширину правой панели (без широкой таблицы) */
+#hideoutPane{width:100%;max-width:100%;box-sizing:border-box}
+#hideoutPane .ho-table-wrap{display:none}
+.ho-cards-list{display:flex;flex-direction:column;gap:8px;width:100%}
+.ho-card-row{
+  width:100%;box-sizing:border-box;
+  background:var(--panel);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px;cursor:pointer;
+  transition:border-color .12s, background .12s;
+}
+.ho-card-row:hover{border-color:rgba(255,42,42,.35);background:rgba(255,42,42,.03)}
+.ho-card-row.ho-good{border-left:3px solid var(--green)}
+.ho-card-row.ho-bad{border-left:3px solid var(--red)}
+.ho-card-row.ho-nodata{border-left:3px solid #444}
+.ho-card-top{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:flex-start}
+.ho-card-left{display:flex;gap:10px;align-items:flex-start;min-width:0;flex:1}
+.ho-card-left .ho-num{color:var(--muted);font-weight:600;font-size:12px;min-width:18px;padding-top:4px}
+.ho-card-left .ho-icon{width:40px;height:40px;flex-shrink:0}
+.ho-card-title{min-width:0}
+.ho-card-metrics{
+  display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-end;
+  font-variant-numeric:tabular-nums;
+}
+.ho-m{display:flex;flex-direction:column;gap:2px;min-width:64px}
+.ho-m .sub{font-size:9px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+.ho-m b{font-size:13px}
+.ho-card-ings{
+  display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px;padding-top:8px;
+  border-top:1px solid rgba(58,26,26,.5);
+}
+.ho-card-ings .ho-ing{margin:0}
