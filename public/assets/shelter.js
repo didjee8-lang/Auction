@@ -236,7 +236,12 @@ function hoRowHtml(x, idx) {
   const ings = (r.ingredients || []).map(ing => {
     const pi = hoPrice(ing.id);
     const priceStr = pi.price != null ? hoFmt(pi.price) : "—";
-    return `<div class="ho-ing"><span class="ho-ing-q">${ing.amount * crafts}×</span> <span class="ho-ing-n">${esc(ing.name)}</span> <span class="ho-ing-p sub">${priceStr}</span></div>`;
+    return `<div class="ho-ing">
+      <span class="ho-ing-ico">${hoIconHtml(ing.id, ing.name)}</span>
+      <span class="ho-ing-q">${ing.amount * crafts}×</span>
+      <span class="ho-ing-n">${esc(ing.name)}</span>
+      <span class="ho-ing-p sub">${priceStr}</span>
+    </div>`;
   }).join("");
 
   const profitCls = c.profitCash > 0 ? "pos" : c.profitCash < 0 ? "neg" : "";
@@ -312,7 +317,7 @@ function hoShowDetail(id) {
 
   const linesHtml = c.lines.map(l => `
     <tr>
-      <td>${esc(l.name)}</td>
+      <td class="ho-res-cell"><span class="ho-ing-ico">${hoIconHtml(l.id, l.name)}</span><span>${esc(l.name)}</span></td>
       <td>${l.need}</td>
       <td><input type="text" inputmode="numeric" data-ho-stock="${esc(l.id)}" value="${l.own || ""}" placeholder="0" style="width:56px"></td>
       <td>${l.toBuy}</td>
@@ -348,6 +353,22 @@ function hoShowDetail(id) {
       <span class="ho-badge ${st.cls}">${st.t}</span>
     </div>
     <div class="sub" style="margin:6px 0">${esc(recipe.benchName)} · ${esc(recipe.category)}${recipe.subcategory ? " · " + esc(recipe.subcategory) : ""} · ${esc(hoPerkName(recipe))} · энергия ${recipe.energy || 0}</div>
+    <div class="ho-recipe-visual">
+      ${(recipe.ingredients||[]).map(ing => {
+        const need = (Number(ing.amount)||0) * crafts;
+        return `<div class="ho-rv-item">
+          <div class="ho-rv-icon">${hoIconHtml(ing.id, ing.name)}</div>
+          <div class="ho-rv-q">${need}×</div>
+          <div class="ho-rv-name">${esc(ing.name)}</div>
+        </div>`;
+      }).join('<div class="ho-rv-plus">+</div>')}
+      <div class="ho-rv-plus">→</div>
+      <div class="ho-rv-item ho-rv-out">
+        <div class="ho-rv-icon">${hoIconHtml(recipe.result?.id, recipe.result?.name)}</div>
+        <div class="ho-rv-q">${c.outQty}×</div>
+        <div class="ho-rv-name">${esc(recipe.result?.name || id)}</div>
+      </div>
+    </div>
     <div class="ho-detail-controls">
       <label>Крафтов <input id="hoCrafts" type="text" inputmode="numeric" value="${crafts}" style="width:64px"></label>
       <label>Цена продажи / шт. <input id="hoSell" type="text" inputmode="decimal" value="${hoState.manualPrice[outId] ?? (c.sellUnit != null ? c.sellUnit : "")}" placeholder="авто" style="width:90px"></label>
