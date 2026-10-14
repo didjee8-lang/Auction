@@ -36,5 +36,6 @@ console.log("Perekup app → public/perekup.html");
 const ho = path.join(root, "client", "hideout_recipes.json");
 if (fs.existsSync(ho)) {
   fs.copyFileSync(ho, path.join(root, "public", "hideout_recipes.json"));
+  fs.copyFileSync(ho, path.join(root, "public", "assets", "hideout_recipes.json"));
   console.log("hideout_recipes.json → public/");
 }

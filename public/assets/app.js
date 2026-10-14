@@ -2464,6 +2464,7 @@ window.addEventListener("resize",()=>{
 
 
 
+setInterval(()=>{ try{ window.rows=rows; }catch{} }, 2000);
 function applyCompactLayout(){
   const w=window.innerWidth, h=window.innerHeight;
   document.body.classList.toggle("compact-ui", w<=700 || h<=640);
@@ -2473,6 +2474,8 @@ window.addEventListener("resize",()=>{ clearTimeout(window._compactT); window._c
 applyCompactLayout();
 
 load(true);updateStatus();
+try{ window.rows=rows; }catch{}
+
 // SSE: сервер пушит после скана — клиент подтягивает дельту
 connectSSE({
   onMarket: () => { load(false); },

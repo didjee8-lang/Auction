@@ -1315,6 +1315,20 @@ app.get("/api/icon/:id", async (req, res) => {
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
+app.get("/hideout_recipes.json", (_req, res) => {
+  const fp = path.join(PUBLIC_DIR, "hideout_recipes.json");
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: "missing hideout_recipes.json" });
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.sendFile(fp);
+});
+app.get("/api/hideout/recipes", (_req, res) => {
+  const fp = path.join(PUBLIC_DIR, "hideout_recipes.json");
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: "missing" });
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.sendFile(fp);
+});
+
+
 app.get("/{*splat}", (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });

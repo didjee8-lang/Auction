@@ -153,23 +153,52 @@
       
       <div id="hideoutPane" style="display:none">
         <div class="ho-toolbar">
-          <input id="hoQ" class="ho-search" placeholder="Поиск рецепта / ресурса..." autocomplete="off">
-          <select id="hoBench"><option value="">Все станции</option>
-            <option value="kitchen_table">Кухня</option>
-            <option value="laboratory_table">Лаборатория</option>
-            <option value="workbench">Верстак</option>
-          </select>
-          <select id="hoCat"><option value="">Все категории</option></select>
-          <select id="hoSort">
-            <option value="profit">По прибыли</option>
-            <option value="roi">По рентабельности</option>
-            <option value="cost">По себестоимости</option>
-            <option value="name">По названию</option>
-          </select>
-          <label class="ho-lab">Мин. прибыль <input id="hoMinProfit" type="text" inputmode="numeric" placeholder="0" style="width:70px"></label>
-          <label class="ho-lab">Мин. ROI% <input id="hoMinRoi" type="text" inputmode="decimal" placeholder="0" style="width:50px"></label>
-          <label class="ho-lab">Бюджет <input id="hoBudget" type="text" inputmode="numeric" placeholder="∞" style="width:90px"></label>
-          <button type="button" class="btn" id="hoRefresh">Обновить цены</button>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Поиск по итогу</label>
+            <input id="hoQ" class="ho-search" placeholder="название предмета" autocomplete="off">
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Есть предмет</label>
+            <input id="hoHas" class="ho-search" placeholder="что хочу пустить в крафт" autocomplete="off">
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Станция</label>
+            <select id="hoBench"><option value="">любой</option>
+              <option value="kitchen_table">Кухня</option>
+              <option value="laboratory_table">Лаборатория</option>
+              <option value="workbench">Верстак</option>
+            </select>
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Категория</label>
+            <select id="hoCat"><option value="">любая</option></select>
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Сортировка</label>
+            <select id="hoSort">
+              <option value="profit">Прибыль</option>
+              <option value="roi">ROI %</option>
+              <option value="cost">Себестоимость</option>
+              <option value="liq">Ликвидность</option>
+              <option value="name">Название</option>
+            </select>
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Мин. прибыль</label>
+            <input id="hoMinProfit" type="text" inputmode="numeric" placeholder="0" style="width:72px">
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Мин. ROI%</label>
+            <input id="hoMinRoi" type="text" inputmode="decimal" placeholder="0" style="width:56px">
+          </div>
+          <div class="ho-filter-group">
+            <label class="ho-flab">Бюджет</label>
+            <input id="hoBudget" type="text" inputmode="numeric" placeholder="∞" style="width:90px">
+          </div>
+          <div class="ho-filter-actions">
+            <button type="button" class="btn primary" id="hoRefresh">Применить</button>
+            <button type="button" class="btn" id="hoReset">Сброс</button>
+          </div>
         </div>
         <div class="ho-status-bar">
           <span id="hoStatus">Загрузка рецептов…</span>
