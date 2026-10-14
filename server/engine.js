@@ -1287,28 +1287,34 @@ app.get("/api/favorites/live",async(req,res)=>{
 });
 
 app.get("/api/icon/:id", async (req, res) => {
-  const id = String(req.params.id || "").replace(/@q\d+$/,"").replace(/[^a-zA-Z0-9_-]/g, "");
+  const id = String(req.params.id || "").replace(/@q\d+(?:p\d+)?$/,"").replace(/[^a-zA-Z0-9_-]/g, "");
   if (!id) return res.status(400).end();
   const local = path.join(ICONS_DIR, `${id}.png`);
   if (fs.existsSync(local) && fs.statSync(local).size > 50) {
+    res.setHeader("Content-Type", "image/png");
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.sendFile(local);
   }
   const item = DB.prepare("SELECT category FROM items WHERE id=?").get(id);
-  const cat = (item?.category || "other").replace(/\.\./g, "");
-  const url = `https://raw.githubusercontent.com/EXBO-Studio/stalzone-database/main/ru/icons/${cat}/${id}.png`;
-  try {
-    const r = await fetch(url);
-    if (!r.ok) return res.status(404).end();
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (buf[0] !== 0x89) return res.status(404).end();
-    fs.writeFileSync(local, buf);
-    res.setHeader("Content-Type", "image/png");
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    return res.send(buf);
-  } catch {
-    return res.status(404).end();
+  const primary = (item?.category || "other").split("/")[0].replace(/\.\./g, "") || "other";
+  const cats = [primary, "other", "armor", "weapon", "artefact", "artifact", "medicine", "food", "ammo", "attachment", "misc"];
+  const seen = new Set();
+  for (const cat of cats) {
+    if (!cat || seen.has(cat)) continue;
+    seen.add(cat);
+    const url = `https://raw.githubusercontent.com/EXBO-Studio/stalzone-database/main/ru/icons/${cat}/${id}.png`;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf[0] !== 0x89) continue;
+      try { fs.writeFileSync(local, buf); } catch {}
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send(buf);
+    } catch {}
   }
+  return res.status(404).end();
 });
 
 

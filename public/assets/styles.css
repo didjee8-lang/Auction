@@ -668,3 +668,22 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
   .ho-hero-num{font-size:22px}
   .ho-table-main th:nth-child(8),.ho-table-main td:nth-child(8){display:none}
 }
+
+.ho-icon{position:relative;background:var(--panel)!important}
+.ho-icon img{width:100%;height:100%;object-fit:contain;display:block}
+.ho-ph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:var(--muted);background:var(--panel);border-radius:8px}
+.ho-overlay{
+  position:fixed;inset:0;z-index:80;
+  display:none;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.72);padding:16px;
+  backdrop-filter:blur(2px);
+}
+.ho-modal{
+  width:min(720px,96vw);max-height:min(90vh,900px);
+  overflow:auto;background:var(--panel);border:1px solid var(--border);
+  border-radius:14px;padding:14px 16px 18px;
+  box-shadow:0 20px 60px rgba(0,0,0,.75),0 0 30px var(--glow);
+}
+body.ho-modal-open{overflow:hidden}
+.ho-modal .ho-detail-head{position:sticky;top:0;background:var(--panel);z-index:1;padding-bottom:8px}
+.ho-modal #hoDetailClose{min-width:36px;font-size:16px}

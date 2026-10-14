@@ -108,6 +108,12 @@ function hoFmt(n) {
   if (n === Infinity) return "∞";
   return Math.round(n).toLocaleString("ru-RU") + " ₽";
 }
+function hoIconHtml(id, name) {
+  const letter = String(name || id || "?").replace(/[«»"]/g,"").trim().charAt(0).toUpperCase() || "?";
+  if (!id) return `<span class="ho-ph">${hoEsc(letter)}</span>`;
+  const src = `/api/icon/${encodeURIComponent(id)}`;
+  return `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling&&(this.nextElementSibling.style.display='flex')"><span class="ho-ph" style="display:none">${hoEsc(letter)}</span>`;
+}
 function hoFmtN(n) {
   if (n == null || !Number.isFinite(n)) return "—";
   return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
@@ -225,7 +231,6 @@ function hoHero(list) {
 function hoRowHtml(x, idx) {
   const { r, c, crafts } = x;
   const st = hoStatusLabel(c.status);
-  const icon = r.result?.id ? `/api/icon/${encodeURIComponent(r.result.id)}` : "";
   const outAmt = r.result?.amount || 1;
   const perk = hoPerkName(r);
   const ings = (r.ingredients || []).map(ing => {
@@ -241,7 +246,7 @@ function hoRowHtml(x, idx) {
     <td class="ho-num">${idx + 1}</td>
     <td class="ho-result">
       <div class="ho-res-main">
-        <div class="ho-icon">${icon ? `<img src="${icon}" alt="" loading="lazy" onerror="this.style.display='none'">` : ""}</div>
+        <div class="ho-icon">${hoIconHtml(r.result?.id, r.result?.name)}</div>
         <div>
           <div class="ho-name"><b>${outAmt * crafts}×</b> «${esc(r.result?.name || r.id)}»</div>
           <div class="sub">${esc(r.category || r.benchName)}</div>
@@ -316,10 +321,29 @@ function hoShowDetail(id) {
       <td>${hoFmt(l.lineBuy)}</td>
     </tr>`).join("");
 
-  box.style.display = "block";
-  box.innerHTML = `
+  // modal overlay — stay in place, no jump to bottom
+  let overlay = document.getElementById("hoOverlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "hoOverlay";
+    overlay.className = "ho-overlay";
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = "flex";
+  document.body.classList.add("ho-modal-open");
+  const closeModal = () => {
+    overlay.style.display = "none";
+    document.body.classList.remove("ho-modal-open");
+    hoState.selected = null;
+    hoSave();
+  };
+  overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
+
+  box.style.display = "none"; // detail panel in-page no longer used
+  overlay.innerHTML = `<div class="ho-modal" role="dialog">
     <div class="ho-detail-head">
-      <button type="button" class="btn" id="hoDetailClose">← К таблице</button>
+      <button type="button" class="btn" id="hoDetailClose">✕</button>
+      <div class="ho-icon" style="width:40px;height:40px">${hoIconHtml(recipe.result?.id, recipe.result?.name)}</div>
       <div class="ho-name">${esc(recipe.result?.name || id)}</div>
       <span class="ho-badge ${st.cls}">${st.t}</span>
     </div>
@@ -341,11 +365,10 @@ function hoShowDetail(id) {
     <div class="table-scroll"><table class="mini ho-table">
       <thead><tr><th>Ресурс</th><th>Нужно</th><th>Есть</th><th>Купить</th><th>Цена/шт</th><th>Источник</th><th>Сумма</th></tr></thead>
       <tbody>${linesHtml}</tbody>
-    </table></div>`;
+    </table></div>
+  </div>`;
 
-  document.getElementById("hoDetailClose").onclick = () => {
-    box.style.display = "none"; hoState.selected = null; hoSave();
-  };
+  document.getElementById("hoDetailClose").onclick = (e) => { e.stopPropagation(); closeModal(); };
   document.getElementById("hoCrafts").oninput = (e) => {
     const v = Math.max(1, Math.floor(Number(String(e.target.value).replace(/\s/g, "")) || 1));
     hoState.crafts[id] = v; hoSave(); hoShowDetail(id);
@@ -358,7 +381,7 @@ function hoShowDetail(id) {
       hoSave(); hoShowDetail(id);
     }
   };
-  box.querySelectorAll("[data-ho-stock]").forEach(inp => {
+  overlay.querySelectorAll("[data-ho-stock]").forEach(inp => {
     inp.oninput = () => {
       const iid = inp.dataset.hoStock;
       const v = String(inp.value).replace(/\s/g, "");
@@ -366,7 +389,7 @@ function hoShowDetail(id) {
       hoSave(); hoShowDetail(id);
     };
   });
-  box.querySelectorAll("[data-ho-price]").forEach(inp => {
+  overlay.querySelectorAll("[data-ho-price]").forEach(inp => {
     inp.oninput = () => {
       const iid = inp.dataset.hoPrice;
       const raw = inp.value.trim();
@@ -374,7 +397,9 @@ function hoShowDetail(id) {
       hoSave(); hoShowDetail(id);
     };
   });
-  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  // Escape to close
+  const onKey = (e) => { if (e.key === "Escape") { closeModal(); document.removeEventListener("keydown", onKey); } };
+  document.addEventListener("keydown", onKey);
 }
 
 function hoFillCats() {
@@ -415,7 +440,11 @@ async function renderHideout() {
     hoHero(list);
     hoRenderGrid(list);
     if (hoState.selected) hoShowDetail(hoState.selected);
-    else { const d = document.getElementById("hoDetail"); if (d) d.style.display = "none"; }
+    else {
+      const d = document.getElementById("hoDetail"); if (d) d.style.display = "none";
+      const ov = document.getElementById("hoOverlay");
+      if (ov) { ov.style.display = "none"; document.body.classList.remove("ho-modal-open"); }
+    }
   } catch (e) {
     console.error("renderHideout", e);
     if (st) st.textContent = "Ошибка: " + (e && e.message ? e.message : e);
