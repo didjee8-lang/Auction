@@ -63,6 +63,17 @@ body{background:var(--bg);color:var(--text);font:13px/1.4 "Segoe UI",system-ui,s
 .drawer-fav{background:none;border:1px solid var(--border);color:var(--muted);cursor:pointer;font-size:16px;padding:4px 8px;border-radius:6px;margin-right:4px;transition:color .15s,border-color .15s,box-shadow .15s}
 .drawer-fav.on{color:var(--neon);border-color:var(--neon);box-shadow:0 0 10px var(--glow)}
 .main{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0;overflow:hidden}
+.main.main-hideout{grid-template-columns:0 1fr}
+.main.main-hideout > .pane:first-child{display:none;width:0;min-width:0;overflow:hidden;border:none}
+.main.main-hideout > .pane:last-child{border-right:none}
+#hideoutPane{width:100%;max-width:100%}
+#hideoutPane .ho-table-wrap{width:100%;overflow-x:auto}
+#hideoutPane .ho-table-main{width:100%;table-layout:auto}
+#hideoutPane .ho-table-main th,
+#hideoutPane .ho-table-main td{padding:8px 10px}
+#hideoutPane .ho-ings{min-width:180px;max-width:none}
+#hideoutPane .ho-result{min-width:200px}
+#hideoutPane .ho-cell{min-width:70px}
 @media(max-width:800px){.main{grid-template-columns:1fr}}
 .pane{display:flex;flex-direction:column;min-height:0;overflow:hidden;border-right:1px solid var(--border)}
 .pane:last-child{border-right:none}

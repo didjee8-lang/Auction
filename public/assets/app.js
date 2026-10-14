@@ -1767,6 +1767,10 @@ function showRightTab(tab){
   if($("perekupPane")) $("perekupPane").style.display=tab==="perekup"?"block":"none";
   if($("dealsPane")) $("dealsPane").style.display=tab==="deals"?"block":"none";
   if($("hideoutPane")) $("hideoutPane").style.display=tab==="hideout"?"block":"none";
+  // Убежище — на всю ширину (таблица крафтов как stalfarm)
+  const main=document.querySelector(".main");
+  if(main) main.classList.toggle("main-hideout", tab==="hideout");
+  try{ window.rows=rows; }catch{}
   if(tab==="catalog") renderCatalog();
   if(tab==="calc") renderCalc();
   if(tab==="perekup") renderPod();
@@ -2235,7 +2239,7 @@ async function load(forceFull){
     }
     if(!j || j.full || !Array.isArray(j.rows)){
       j=await (await fetch("/api/market",{cache:"no-store"})).json();
-      rows=j.rows||[];
+      rows=j.rows||[]; try{window.rows=rows}catch{};
     } else {
       // Merge delta into existing rows by id
       const map=new Map(rows.map(r=>[r.id,r]));

@@ -40,9 +40,12 @@ function hoPrice(itemId) {
   for (const r of marketRows) {
     const id = String(r.id || "").replace(/@q\d+(?:p\d+)?$/, "");
     if (id !== base) continue;
-    const p = r.minUnitPrice ?? r.min_price;
-    if (p != null && p > 0 && (best == null || p < best)) best = p;
-    const s = r.sales7d || r.soldPerDay || r.salesToday || 0;
+    const candidates = [r.minUnitPrice, r.min_price, r.minPrice, r.lastSale, r.refPrice, r.marketPrice, r.price];
+    for (const p of candidates) {
+      const n = Number(p);
+      if (Number.isFinite(n) && n > 0 && (best == null || n < best)) best = n;
+    }
+    const s = Number(r.sales7d || r.soldPerDay || r.salesToday || r.liquidity || 0) || 0;
     if (s > sales) sales = s;
   }
   if (best != null) return { price: best, source: "market", sales };
