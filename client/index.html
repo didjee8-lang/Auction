@@ -20,6 +20,7 @@
   <button type="button" class="mobile-nav-item" data-mobile-tab="calc">Калькулятор</button>
   <button type="button" class="mobile-nav-item" data-mobile-tab="perekup">Перекуп</button>
   <button type="button" class="mobile-nav-item" data-mobile-tab="deals">Сделки</button>
+  <button type="button" class="mobile-nav-item" data-mobile-tab="hideout">Убежище</button>
   <button type="button" class="mobile-nav-close" id="mobileNavClose">Закрыть</button>
 </div>
 <div class="dashboard" id="dashboard">
@@ -70,6 +71,7 @@
         <div class="tab" data-tab="calc">Калькулятор</div>
         <div class="tab" data-tab="perekup">Перекуп</div>
         <div class="tab" data-tab="deals">Сделки</div>
+        <div class="tab" data-tab="hideout">Убежище</div>
       </div>
       <div id="catHead" style="display:none;align-items:center;width:100%">
         <button class="back-btn" id="catBack">← Назад</button>
@@ -129,7 +131,8 @@
           <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
           <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
           <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
-          <button type="button" class="btn" id="podHistBtn" style="margin-left:auto">История</button>
+          <a class="btn" id="podOpenApp" href="/perekup.html" target="_blank" rel="noopener" title="Открыть Перекуп отдельным окном" style="margin-left:auto;text-decoration:none">↗ Окно</a>
+          <button type="button" class="btn" id="podHistBtn">История</button>
         </div>
         <div class="calc-sum" style="margin-top:12px">
           <div class="row"><span>Общая сумма (без комиссии)</span>
@@ -146,6 +149,36 @@
           <div id="podHistList"><div class="empty">Пока пусто — кликни по общей сумме</div></div>
         </div>
       </div>
+      
+      <div id="hideoutPane" style="display:none">
+        <div class="ho-toolbar">
+          <input id="hoQ" class="ho-search" placeholder="Поиск рецепта / ресурса..." autocomplete="off">
+          <select id="hoBench"><option value="">Все станции</option>
+            <option value="kitchen_table">Кухня</option>
+            <option value="laboratory_table">Лаборатория</option>
+            <option value="workbench">Верстак</option>
+          </select>
+          <select id="hoCat"><option value="">Все категории</option></select>
+          <select id="hoSort">
+            <option value="profit">По прибыли</option>
+            <option value="roi">По рентабельности</option>
+            <option value="cost">По себестоимости</option>
+            <option value="name">По названию</option>
+          </select>
+          <label class="ho-lab">Мин. прибыль <input id="hoMinProfit" type="text" inputmode="numeric" placeholder="0" style="width:70px"></label>
+          <label class="ho-lab">Мин. ROI% <input id="hoMinRoi" type="text" inputmode="decimal" placeholder="0" style="width:50px"></label>
+          <label class="ho-lab">Бюджет <input id="hoBudget" type="text" inputmode="numeric" placeholder="∞" style="width:90px"></label>
+          <button type="button" class="btn" id="hoRefresh">Обновить цены</button>
+        </div>
+        <div class="ho-status-bar">
+          <span id="hoStatus">Загрузка рецептов…</span>
+          <span id="hoUpdated" class="sub"></span>
+        </div>
+        <div class="ho-top" id="hoTop"></div>
+        <div class="ho-grid" id="hoGrid"></div>
+        <div class="ho-detail" id="hoDetail" style="display:none"></div>
+      </div>
+
       <div id="dealsPane" style="display:none">
         <div class="sub" style="margin-bottom:8px">Журнал сделок: купил → продал на аукционе (−5% комиссия). История хранится у тебя в браузере.</div>
         <div class="calc-search" style="margin-bottom:10px">

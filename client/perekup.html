@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#020202">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Перекуп</title>
+<link rel="stylesheet" href="/assets/styles.css">
+<link rel="manifest" href="/perekup.webmanifest">
+<style>
+  /* App shell — only Перекуп, same theme as site */
+  html,body{height:100%;overflow:hidden}
+  body.perekup-app{
+    display:flex;flex-direction:column;
+    background:var(--bg);color:var(--text);
+  }
+  .perekup-app-top{
+    display:flex;align-items:center;gap:10px;flex-shrink:0;
+    padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--border);
+  }
+  .perekup-app-top .logo{font-weight:800;font-size:15px;color:var(--neon);letter-spacing:.04em}
+  .perekup-app-top .sub{color:var(--muted);font-size:11px;margin-left:4px}
+  .perekup-app-top a.open-full{margin-left:auto;font-size:11px;color:var(--muted);text-decoration:none}
+  .perekup-app-top a.open-full:hover{color:var(--neon2)}
+  .perekup-app-body{
+    flex:1;min-height:0;overflow:auto;padding:10px 12px 16px;
+  }
+  .perekup-app-root{max-width:100%}
+</style>
+</head>
+<body class="perekup-app compact-ui">
+  <div class="perekup-app-top">
+    <div class="logo">Перекуп</div>
+    <span class="sub">те же данные, что на сайте</span>
+    <a class="open-full" href="/" target="_blank" rel="noopener">Полный сайт ↗</a>
+  </div>
+  <div class="perekup-app-body">
+<div id="perekupPane" style="display:block" class="perekup-pane perekup-app-root">
+        <div class="sub pod-help" style="margin-bottom:8px">Быстрый подсчёт: название, цвет, цена / шт. сохраняются. При сделке — только количество.</div>
+        <div class="pod-table-wrap">
+        <table class="calc-table" id="podTable">
+          <thead><tr>
+            <th class="pod-drag-th" title="Перетащить"></th>
+            <th class="pod-col-color" style="width:12%">Цвет</th>
+            <th class="pod-col-name" style="width:26%">Предмет</th>
+            <th class="pod-col-price" style="width:16%"><span class="full-h">Цена / шт.</span><span class="short-h">Цена</span></th>
+            <th class="pod-col-qty" style="width:12%"><span class="full-h">Кол-во</span><span class="short-h">Кол</span></th>
+            <th class="pod-col-sum" style="width:16%">Сумма</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="podBody"></tbody>
+        </table>
+        </div>
+        <div class="pod-actions" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="btn primary" id="podAddRow">+ Строка</button>
+          <button type="button" class="btn" id="podClearQty" title="Обнулить только количества">Сбросить кол-во</button>
+          <button type="button" class="btn" id="podClearAll" title="Удалить все строки">Очистить всё</button>
+          <button type="button" class="btn" id="podHistBtn" style="margin-left:auto">История</button>
+        </div>
+        <div class="calc-sum" style="margin-top:12px">
+          <div class="row"><span>Общая сумма (без комиссии)</span>
+            <b id="podSum" class="pod-copy" title="Копирует и сохраняет в историю" style="color:var(--neon2);cursor:pointer;user-select:none;padding:2px 8px;border-radius:6px;border:1px dashed transparent">—</b>
+          </div>
+          <div class="row sub"><span>Строк с суммой</span><b id="podLines">0</b></div>
+          <div class="sub pod-help" style="margin-top:4px">Кликни по сумме — копия + история</div>
+        </div>
+        <div id="podHistPanel" style="display:none;margin-top:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+            <div class="section" style="margin:0">История подсчётов</div>
+            <button type="button" class="btn" id="podHistClear" style="margin-left:auto">Очистить историю</button>
+          </div>
+          <div id="podHistList"><div class="empty">Пока пусто — кликни по общей сумме</div></div>
+        </div>
+      </div>
+  </div>
+  <script src="/assets/pod-app.js"></script>
+</body>
+</html>

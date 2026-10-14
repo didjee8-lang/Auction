@@ -1,0 +1,11 @@
+{
+  "name": "STALZONE Перекуп",
+  "short_name": "Перекуп",
+  "description": "Быстрый подсчёт перекупа — как на сайте",
+  "start_url": "/perekup.html",
+  "display": "standalone",
+  "background_color": "#020202",
+  "theme_color": "#020202",
+  "lang": "ru",
+  "icons": []
+}
