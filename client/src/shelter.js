@@ -14,6 +14,8 @@ function hoGetRows(){
 
 let hoRecipes = [];
 let hoLoaded = false;
+let hoPriceCache = {}; // id -> {price, source, sales7d, soldPerDay}
+let hoPriceCacheAt = 0;
 let hoState = (() => {
   try { return JSON.parse(localStorage.getItem(HO_LS) || "{}"); } catch { return {}; }
 })();
@@ -29,12 +31,20 @@ function hoSave() {
 }
 
 function hoPrice(itemId) {
-  if (hoState.manualPrice[itemId] != null && hoState.manualPrice[itemId] !== "") {
-    const n = Number(String(hoState.manualPrice[itemId]).replace(/\s/g, "").replace(",", "."));
-    if (Number.isFinite(n) && n >= 0) return { price: n, source: "manual" };
+  const base = String(itemId || "").replace(/@q\d+(?:p\d+)?$/, "");
+  if (!base) return { price: null, source: "none", sales: 0 };
+
+  if (hoState.manualPrice[base] != null && hoState.manualPrice[base] !== "") {
+    const n = Number(String(hoState.manualPrice[base]).replace(/\s/g, "").replace(",", "."));
+    if (Number.isFinite(n) && n >= 0) return { price: n, source: "manual", sales: 0 };
   }
+
+  const cached = hoPriceCache[base];
+  if (cached && cached.price != null && cached.price > 0) {
+    return { price: cached.price, source: cached.source || "cache", sales: cached.soldPerDay || cached.sales7d || 0 };
+  }
+
   const marketRows = hoGetRows();
-  const base = String(itemId);
   let best = null;
   let sales = 0;
   for (const r of marketRows) {
@@ -45,10 +55,14 @@ function hoPrice(itemId) {
       const n = Number(p);
       if (Number.isFinite(n) && n > 0 && (best == null || n < best)) best = n;
     }
-    const s = Number(r.sales7d || r.soldPerDay || r.salesToday || r.liquidity || 0) || 0;
+    const s = Number(r.soldPerDay || r.sales7d || r.salesToday || r.liquidity || 0) || 0;
     if (s > sales) sales = s;
   }
   if (best != null) return { price: best, source: "market", sales };
+
+  if (cached && cached.price != null) {
+    return { price: cached.price, source: cached.source || "cache", sales: cached.soldPerDay || 0 };
+  }
   return { price: null, source: "none", sales: 0 };
 }
 
@@ -120,6 +134,70 @@ function hoIconHtml(id, name) {
 function hoFmtN(n) {
   if (n == null || !Number.isFinite(n)) return "—";
   return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+}
+
+
+async function hoEnsurePrices(force = false) {
+  if (!hoRecipes.length) return;
+  if (!force && hoPriceCacheAt && Date.now() - hoPriceCacheAt < 60000 && Object.keys(hoPriceCache).length > 50) return;
+  const ids = new Set();
+  for (const r of hoRecipes) {
+    if (r.result?.id) ids.add(String(r.result.id));
+    for (const ing of r.ingredients || []) if (ing.id) ids.add(String(ing.id));
+  }
+  // also merge live market rows into cache first
+  for (const r of hoGetRows()) {
+    const id = String(r.id || "").replace(/@q\d+(?:p\d+)?$/, "");
+    if (!id) continue;
+    const candidates = [r.minUnitPrice, r.min_price, r.minPrice, r.lastSale];
+    let best = null;
+    for (const p of candidates) {
+      const n = Number(p);
+      if (Number.isFinite(n) && n > 0 && (best == null || n < best)) best = n;
+    }
+    if (best != null) {
+      hoPriceCache[id] = {
+        price: best,
+        source: "market",
+        sales7d: r.sales7d || 0,
+        soldPerDay: r.soldPerDay || 0,
+      };
+    }
+  }
+  const list = [...ids];
+  const chunk = 400;
+  for (let i = 0; i < list.length; i += chunk) {
+    const part = list.slice(i, i + chunk);
+    try {
+      const res = await fetch("/api/hideout/prices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: part }),
+      });
+      if (!res.ok) continue;
+      const j = await res.json();
+      if (j && j.prices) {
+        for (const [id, info] of Object.entries(j.prices)) {
+          if (!info) continue;
+          // prefer existing market lot if cheaper
+          const prev = hoPriceCache[id];
+          if (info.price != null && info.price > 0) {
+            if (!prev || prev.price == null || info.price < prev.price || prev.source === "none") {
+              hoPriceCache[id] = info;
+            } else if (prev && (info.soldPerDay || info.sales7d)) {
+              prev.soldPerDay = info.soldPerDay || prev.soldPerDay;
+              prev.sales7d = info.sales7d || prev.sales7d;
+            }
+          } else if (!prev) {
+            hoPriceCache[id] = info;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("hoEnsurePrices", e);
+    }
+  }
+  hoPriceCacheAt = Date.now();
 }
 
 async function hoLoadRecipes() {

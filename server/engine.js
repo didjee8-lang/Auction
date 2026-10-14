@@ -1319,6 +1319,40 @@ app.get("/api/icon/:id", async (req, res) => {
 
 
 
+
+app.post("/api/hideout/prices", (req, res) => {
+  try {
+    let ids = req.body?.ids;
+    if (!Array.isArray(ids)) ids = [];
+    ids = [...new Set(ids.map(x => String(x || "").replace(/@q\d+(?:p\d+)?$/, "").replace(/[^a-zA-Z0-9_-]/g, "")).filter(Boolean))].slice(0, 800);
+    const getMinLot = DB.prepare("SELECT price FROM lots WHERE item_id=? AND price>0 ORDER BY price ASC LIMIT 1");
+    const getLastSale = DB.prepare("SELECT price FROM sale_observations WHERE item_id=? AND price>0 ORDER BY datetime(ts) DESC LIMIT 1");
+    const getObs = DB.prepare("SELECT min_price FROM price_observations WHERE item_id=? ORDER BY ts DESC LIMIT 1");
+    const getSales7 = DB.prepare("SELECT COUNT(*) n FROM sale_observations WHERE item_id=? AND datetime(ts) >= datetime('now','-7 days')");
+    const out = {};
+    for (const id of ids) {
+      const lot = getMinLot.get(id);
+      const sale = getLastSale.get(id);
+      const obs = getObs.get(id);
+      const s7 = getSales7.get(id);
+      let price = null;
+      let source = "none";
+      if (lot?.price != null && lot.price > 0) { price = lot.price; source = "lot"; }
+      else if (sale?.price != null && sale.price > 0) { price = sale.price; source = "sale"; }
+      else if (obs?.min_price != null && obs.min_price > 0) { price = obs.min_price; source = "obs"; }
+      out[id] = {
+        price,
+        source,
+        sales7d: s7?.n || 0,
+        soldPerDay: s7?.n != null ? Math.round((s7.n / 7) * 10) / 10 : 0,
+      };
+    }
+    res.json({ ok: true, count: ids.length, prices: out });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 app.get("/hideout_recipes.json", (_req, res) => {
