@@ -74,9 +74,9 @@ function scAHashFromImageData(data, w, h) {
       for (let py = y0; py < Math.max(y0 + 1, y1); py++) {
         for (let px = x0; px < Math.max(x0 + 1, x1); px++) {
           const i = (py * w + px) * 4;
-          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+          const a = data[i + 3];
           if (a < 20) continue;
-          sum += 0.299 * r + 0.587 * g + 0.114 * b;
+          sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
           cnt++;
         }
       }
@@ -85,16 +85,7 @@ function scAHashFromImageData(data, w, h) {
   }
   let avg = 0;
   for (let i = 0; i < vals.length; i++) avg += vals[i];
-  avg /= vals.length;
-  let hex = "";
-  for (let i = 0; i < vals.length; i += 4) {
-    let nibble = 0;
-    for (let b = 0; b < 4; b++) {
-      if (i + b < vals.length && vals[i + b] >= avg) nibble |= 1 << (3 - b);
-    }
-    // pack 4 bits at a time into hex properly - do 8 bits
-  }
-  // rebuild as 64 hex chars (256 bits)
+  avg /= vals.length || 1;
   const bits = [];
   for (let i = 0; i < vals.length; i++) bits.push(vals[i] >= avg ? 1 : 0);
   let out = "";
@@ -103,6 +94,43 @@ function scAHashFromImageData(data, w, h) {
     out += v.toString(16);
   }
   return out;
+}
+
+/** Dominant colors bucket signature (12 dims) for rejecting wrong matches */
+function scColorSigFromImageData(data, w, h) {
+  const bins = new Float64Array(12); // 4 hue-ish groups x 3 brightness via RGB coarse
+  let n = 0;
+  const step = Math.max(1, Math.floor(Math.min(w, h) / 32));
+  for (let y = 0; y < h; y += step) {
+    for (let x = 0; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      if (data[i + 3] < 30) continue;
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      const yv = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (yv < 18) continue; // ignore near-black bg
+      n++;
+      // coarse color family
+      let fam = 0;
+      if (r >= g && r >= b) fam = 0; // red-ish
+      else if (g >= r && g >= b) fam = 1; // green
+      else fam = 2; // blue
+      if (Math.abs(r - g) < 20 && Math.abs(g - b) < 20) fam = 3; // gray
+      const br = yv < 80 ? 0 : yv < 160 ? 1 : 2;
+      bins[fam * 3 + br] += 1;
+    }
+  }
+  if (n > 0) for (let i = 0; i < bins.length; i++) bins[i] /= n;
+  return Array.from(bins);
+}
+
+function scColorDist(a, b) {
+  if (!a || !b || a.length !== b.length) return 99;
+  let s = 0;
+  for (let i = 0; i < a.length; i++) {
+    const d = a[i] - b[i];
+    s += d * d;
+  }
+  return Math.sqrt(s);
 }
 
 function scHamming(a, b) {
@@ -120,7 +148,10 @@ function scHashCanvas(canvas) {
   const { width: w, height: h } = canvas;
   if (w < 4 || h < 4) return null;
   const img = ctx.getImageData(0, 0, w, h);
-  return scAHashFromImageData(img.data, w, h);
+  return {
+    hash: scAHashFromImageData(img.data, w, h),
+    color: scColorSigFromImageData(img.data, w, h),
+  };
 }
 
 async function scLoadIconHash(id) {
@@ -136,8 +167,7 @@ async function scLoadIconHash(id) {
         const ctx = c.getContext("2d");
         ctx.fillStyle = "#0a0a0a";
         ctx.fillRect(0, 0, size, size);
-        // contain
-        const scale = Math.min(size / img.width, size / img.height);
+        const scale = Math.min(size / img.width, size / img.height) * 0.92;
         const dw = img.width * scale;
         const dh = img.height * scale;
         ctx.drawImage(img, (size - dw) / 2, (size - dh) / 2, dw, dh);
@@ -152,12 +182,10 @@ async function scLoadIconHash(id) {
 }
 
 async function scEnsureCatalog(onProgress) {
-  // Только предметы из рецептов убежища (крафт) — не весь каталог ~2600
+  // Только крафт из рецептов; приоритет — начальные дешёвые ингредиенты
   if (scCatalog.length > 20 && scHashReady && Date.now() - scCatalogAt < 300000) return;
 
   const map = new Map();
-
-  // 1) hideout_recipes.json — ингредиенты + результаты
   const recipeUrls = ["/hideout_recipes.json", "/api/hideout/recipes", "/assets/hideout_recipes.json"];
   let recipes = [];
   for (const url of recipeUrls) {
@@ -171,17 +199,38 @@ async function scEnsureCatalog(onProgress) {
     } catch {}
   }
 
+  // min skill / energy per item from recipes where it is an ingredient
+  const meta = new Map(); // id -> {minSkill, minEnergy, asIng, asRes}
+
   for (const rec of recipes) {
-    if (rec.result?.id && rec.result?.name) {
+    let minSkill = 99;
+    const perks = rec.perks || {};
+    for (const v of Object.values(perks)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n < minSkill) minSkill = n;
+    }
+    if (minSkill === 99) minSkill = 5;
+    const energy = Number(rec.energy) || 0;
+
+    if (rec.result?.id) {
       const id = scBaseId(rec.result.id);
-      if (id && !map.has(id)) {
-        map.set(id, {
-          id,
-          name: rec.result.name,
-          nameN: scNorm(rec.result.name),
-          hash: null,
-          role: "result",
-        });
+      if (id) {
+        if (!map.has(id)) {
+          map.set(id, {
+            id,
+            name: rec.result.name || id,
+            nameN: scNorm(rec.result.name || id),
+            hash: null,
+            color: null,
+            role: "result",
+            minSkill: 99,
+            minEnergy: 1e9,
+            priority: 50,
+          });
+        }
+        const m = meta.get(id) || { minSkill: 99, minEnergy: 1e9, asIng: 0, asRes: 0 };
+        m.asRes++;
+        meta.set(id, m);
       }
     }
     for (const ing of rec.ingredients || []) {
@@ -190,43 +239,76 @@ async function scEnsureCatalog(onProgress) {
       if (!id) continue;
       const prev = map.get(id);
       if (prev) {
-        prev.role = prev.role === "result" ? "both" : "ingredient";
-        if (ing.name && (!prev.name || prev.name === id)) {
+        if (prev.role === "result") prev.role = "both";
+        else if (prev.role !== "both") prev.role = "ingredient";
+        if (ing.name) {
           prev.name = ing.name;
           prev.nameN = scNorm(ing.name);
         }
+        prev.minSkill = Math.min(prev.minSkill ?? 99, minSkill);
+        prev.minEnergy = Math.min(prev.minEnergy ?? 1e9, energy || 0);
       } else {
         map.set(id, {
           id,
           name: ing.name || id,
           nameN: scNorm(ing.name || id),
           hash: null,
+          color: null,
           role: "ingredient",
+          minSkill,
+          minEnergy: energy || 0,
+          priority: 0,
         });
       }
+      const m = meta.get(id) || { minSkill: 99, minEnergy: 1e9, asIng: 0, asRes: 0 };
+      m.asIng++;
+      m.minSkill = Math.min(m.minSkill, minSkill);
+      m.minEnergy = Math.min(m.minEnergy, energy || 0);
+      meta.set(id, m);
     }
   }
 
-  // 2) Подтянуть живые цены/имена с аукциона только для этих id
-  const craftIds = new Set(map.keys());
+  // priority: ingredient + low skill + low energy first (starter craft mats)
+  for (const it of map.values()) {
+    const m = meta.get(it.id);
+    if (m) {
+      it.minSkill = Math.min(it.minSkill ?? 99, m.minSkill);
+      it.minEnergy = Math.min(it.minEnergy ?? 1e9, m.minEnergy);
+    }
+    let prio = 100;
+    if (it.role === "ingredient" || it.role === "both") prio -= 40;
+    if ((it.minSkill ?? 99) <= 1) prio -= 25;
+    else if ((it.minSkill ?? 99) <= 2) prio -= 15;
+    else if ((it.minSkill ?? 99) <= 3) prio -= 8;
+    if ((it.minEnergy ?? 1e9) <= 500) prio -= 10;
+    else if ((it.minEnergy ?? 1e9) <= 1500) prio -= 5;
+    // market price if known — cheaper = higher priority
+    const pr = scPrice(it.id).price;
+    it.marketPrice = pr;
+    if (pr != null) {
+      if (pr <= 500) prio -= 20;
+      else if (pr <= 2000) prio -= 12;
+      else if (pr <= 10000) prio -= 6;
+      else if (pr >= 100000) prio += 10; // expensive less preferred on ties
+    }
+    it.priority = prio;
+  }
+
   for (const r of scGetRows()) {
     const id = scBaseId(r.id);
-    if (!id || !craftIds.has(id)) continue;
+    if (!map.has(id)) continue;
     const it = map.get(id);
-    if (it && r.name) {
+    if (r.name) {
       it.name = r.name;
       it.nameN = scNorm(r.name);
     }
+    const pr = scPrice(id).price;
+    if (pr != null) it.marketPrice = pr;
   }
 
-  scCatalog = [...map.values()];
-  if (!scCatalog.length) {
-    scHashReady = false;
-    scCatalogAt = Date.now();
-    return;
-  }
+  // sort: high priority first for matching preference when distances close
+  scCatalog = [...map.values()].sort((a, b) => (a.priority ?? 50) - (b.priority ?? 50));
 
-  // хэши иконок только для крафтовых id
   const need = scCatalog.filter((x) => !x.hash);
   let done = 0;
   const concurrency = 10;
@@ -234,7 +316,11 @@ async function scEnsureCatalog(onProgress) {
     const batch = need.slice(i, i + concurrency);
     await Promise.all(
       batch.map(async (it) => {
-        it.hash = await scLoadIconHash(it.id);
+        const sig = await scLoadIconHash(it.id);
+        if (sig) {
+          it.hash = sig.hash;
+          it.color = sig.color;
+        }
         done++;
         if (onProgress) onProgress(done, need.length);
       })
@@ -244,21 +330,33 @@ async function scEnsureCatalog(onProgress) {
   scCatalogAt = Date.now();
 }
 
-function scMatchHash(hash) {
-  if (!hash) return null;
-  let best = null;
-  let bestD = 999;
+/**
+ * Match icon: strict hash + color, prefer starter/cheap ingredients on close scores
+ */
+function scMatchHash(sig) {
+  if (!sig || !sig.hash) return null;
+  const candidates = [];
   for (const it of scCatalog) {
     if (!it.hash) continue;
-    const d = scHamming(hash, it.hash);
-    if (d < bestD) {
-      bestD = d;
-      best = it;
-    }
+    const hd = scHamming(sig.hash, it.hash);
+    if (hd > 40) continue; // stricter than before
+    const cd = scColorDist(sig.color, it.color);
+    if (cd > 0.55) continue; // different color family
+    // combined score: lower better
+    const score = hd + cd * 40 + (it.priority ?? 50) * 0.15;
+    candidates.push({ item: it, hd, cd, score });
   }
-  // 256 bits → threshold ~40-55 is reasonable for similar icons
-  if (!best || bestD > 52) return null;
-  return { item: best, dist: bestD, score: Math.max(0, Math.round(100 - (bestD / 64) * 100)) };
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.score - b.score || a.hd - b.hd || (a.item.priority ?? 50) - (b.item.priority ?? 50));
+  const best = candidates[0];
+  // reject if still too weak
+  if (best.hd > 36 && best.cd > 0.35) return null;
+  return {
+    item: best.item,
+    dist: best.hd,
+    colorDist: best.cd,
+    score: Math.max(0, Math.round(100 - best.hd * 2 - best.cd * 30)),
+  };
 }
 
 /* ---- grid detection on screenshot ---- */
@@ -416,17 +514,17 @@ function scDetectCells(canvas) {
 }
 
 function scCropHash(canvas, cell) {
-  // icon is upper ~70% of cell; ignore very dark margins
-  const pad = Math.floor(Math.min(cell.w, cell.h) * 0.08);
+  // icon is upper ~70% of cell; ignore margins and qty text
+  const pad = Math.floor(Math.min(cell.w, cell.h) * 0.1);
   const iw = Math.max(8, cell.w - pad * 2);
-  const ih = Math.max(8, Math.floor(cell.h * 0.72) - pad);
+  const ih = Math.max(8, Math.floor(cell.h * 0.68) - pad);
   const c = document.createElement("canvas");
   c.width = 64;
   c.height = 64;
   const ctx = c.getContext("2d");
   ctx.fillStyle = "#0a0a0a";
   ctx.fillRect(0, 0, 64, 64);
-  ctx.drawImage(canvas, cell.x + pad, cell.y + pad, iw, ih, 0, 0, 64, 64);
+  ctx.drawImage(canvas, cell.x + pad, cell.y + pad, iw, ih, 4, 4, 56, 56);
   return scHashCanvas(c);
 }
 
@@ -531,6 +629,7 @@ async function scRecognizeScreenshot(file, st) {
         unit: scPrice(id).price,
         score: match.score,
         dist: match.dist,
+        itemRole: match.item.role === "ingredient" ? "ингредиент" : match.item.role === "both" ? "крафт" : "результат",
         manual: false,
       };
       seen.set(id, row);
@@ -557,6 +656,12 @@ async function scRecognizeScreenshot(file, st) {
     } catch {}
   }
 
+  // показать сначала начальные/дешёвые ингредиенты
+  found.sort((a, b) => {
+    const ia = scCatalog.find((x) => x.id === a.id);
+    const ib = scCatalog.find((x) => x.id === b.id);
+    return (ia?.priority ?? 50) - (ib?.priority ?? 50);
+  });
   return found;
 }
 
@@ -638,7 +743,7 @@ function scRender() {
           <div class="sc-ico"><img src="/api/icon/${encodeURIComponent(scBaseId(L.id))}" alt="" onerror="this.style.display='none'"></div>
           <div class="sc-meta">
             <div class="sc-name">${scEsc(L.name)}</div>
-            <div class="sub">${scEsc(L.id)}${L.score != null ? " · совп. " + L.score + "%" : ""}${L.dist != null ? " · d" + L.dist : ""}</div>
+            <div class="sub">${scEsc(L.id)}${L.score != null ? " · совп. " + L.score + "%" : ""}${L.itemRole ? " · " + L.itemRole : ""}</div>
           </div>
         </div>
         <div class="sc-fields">
