@@ -334,29 +334,28 @@ async function scEnsureCatalog(onProgress) {
  * Match icon: strict hash + color, prefer starter/cheap ingredients on close scores
  */
 function scMatchHash(sig) {
-  if (!sig || !sig.hash) return null;
+  if (!sig || !sig.hash || !scCatalog.length) return null;
   const candidates = [];
   for (const it of scCatalog) {
     if (!it.hash) continue;
     const hd = scHamming(sig.hash, it.hash);
-    if (hd > 40) continue; // stricter than before
     const cd = scColorDist(sig.color, it.color);
-    if (cd > 0.55) continue; // different color family
-    // combined score: lower better
-    const score = hd + cd * 40 + (it.priority ?? 50) * 0.15;
+    // Deliberately do not let price/recipe priority influence visual identity.
+    // A wrong item with a plausible price is worse than asking for confirmation.
+    const score = hd + cd * 34;
     candidates.push({ item: it, hd, cd, score });
   }
+  candidates.sort((a, b) => a.score - b.score);
   if (!candidates.length) return null;
-  candidates.sort((a, b) => a.score - b.score || a.hd - b.hd || (a.item.priority ?? 50) - (b.item.priority ?? 50));
   const best = candidates[0];
-  // reject if still too weak
-  if (best.hd > 36 && best.cd > 0.35) return null;
-  return {
-    item: best.item,
-    dist: best.hd,
-    colorDist: best.cd,
-    score: Math.max(0, Math.round(100 - best.hd * 2 - best.cd * 30)),
-  };
+  const second = candidates[1];
+  // Conservative rejection: icon hashes are not semantic AI. Similar-looking
+  // icons must not silently become a false item in a price calculation.
+  if (best.hd > 24 || best.cd > 0.38) return null;
+  if (second && (second.score - best.score) < 5.5 && second.hd <= best.hd + 5) return null;
+  const confidence = Math.max(0, Math.min(99, Math.round(100 - best.hd * 2.4 - best.cd * 32)));
+  if (confidence < 42) return null;
+  return { item: best.item, dist: best.hd, colorDist: best.cd, score: confidence };
 }
 
 /* ---- grid detection on screenshot ---- */
@@ -781,7 +780,21 @@ function scRender() {
       <div class="row sub"><span>Ваша комиссия / запас</span><b>− ${scFmt(t.fee)}</b></div>
       <div class="row sc-pay"><span>К отправке</span><b class="pos">${scFmt(t.net)}</b></div>
       ${t.missing ? `<div class="sub">Без цены: ${t.missing} — укажите вручную</div>` : ""}
-      <button type="button" class="btn primary" id="scCopyPay" style="margin-top:8px">Скопировать сумму</button>`;
+      <div class="sc-copy-actions">
+        <button type="button" class="btn primary" id="scCopyPay">Скопировать сумму</button>
+        <button type="button" class="btn" id="scCopyItems">Скопировать список предметов и цен</button>
+      </div>`;
+    document.getElementById("scCopyItems")?.addEventListener("click", async () => {
+      const lines = scLines.map((L) => {
+        const qty = Math.max(1, Number(L.qty) || 1);
+        const unit = L.unit != null && Number.isFinite(Number(L.unit)) ? Number(L.unit) : null;
+        const total = unit == null ? "цена не найдена" : `${Math.round(unit * qty)} ₽`;
+        return `${L.name} ×${qty} | ${unit == null ? "—" : `${Math.round(unit)} ₽/шт`} | ${total}`;
+      });
+      const payload = lines.join("\n") + `\nИтого после комиссии: ${Math.round(t.net)} ₽`;
+      try { await navigator.clipboard.writeText(payload); const b = document.getElementById("scCopyItems"); if (b) { b.textContent = "Список скопирован"; setTimeout(() => { if (b.isConnected) b.textContent = "Скопировать список предметов и цен"; }, 1200); } }
+      catch { prompt("Список предметов", payload); }
+    });
     document.getElementById("scCopyPay")?.addEventListener("click", async () => {
       const n = Math.round(t.net);
       try {
@@ -803,7 +816,7 @@ async function scRunFile(file) {
   try {
     scLines = await scRecognizeScreenshot(file, st);
     if (st) st.textContent = scLines.length
-      ? `Распознано: ${scLines.length} (каталог крафта: ${scCatalog.length})`
+      ? `Надёжно распознано: ${scLines.length} · каталог крафта: ${scCatalog.length}. Сомнительные совпадения пропущены, добавьте их вручную.`
       : `Не найдено в крафте (${scCatalog.length} предм.) — добавьте вручную`;
   } catch (e) {
     if (st) st.textContent = "Ошибка: " + (e.message || e);
