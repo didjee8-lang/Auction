@@ -152,52 +152,84 @@ async function scLoadIconHash(id) {
 }
 
 async function scEnsureCatalog(onProgress) {
-  if (scCatalog.length > 50 && scHashReady && Date.now() - scCatalogAt < 300000) return;
+  // Только предметы из рецептов убежища (крафт) — не весь каталог ~2600
+  if (scCatalog.length > 20 && scHashReady && Date.now() - scCatalogAt < 300000) return;
+
   const map = new Map();
-  for (const r of scGetRows()) {
-    const id = scBaseId(r.id);
-    if (!id || !r.name) continue;
-    if (!map.has(id)) map.set(id, { id, name: r.name, nameN: scNorm(r.name), hash: null });
-  }
-  try {
-    const r = await fetch("/hideout_recipes.json", { cache: "force-cache" });
-    if (r.ok) {
-      const j = await r.json();
-      if (Array.isArray(j)) {
-        for (const rec of j) {
-          if (rec.result?.id && rec.result?.name) {
-            const id = scBaseId(rec.result.id);
-            if (!map.has(id)) map.set(id, { id, name: rec.result.name, nameN: scNorm(rec.result.name), hash: null });
-          }
-          for (const ing of rec.ingredients || []) {
-            if (ing.id && ing.name) {
-              const id = scBaseId(ing.id);
-              if (!map.has(id)) map.set(id, { id, name: ing.name, nameN: scNorm(ing.name), hash: null });
-            }
-          }
-        }
-      }
-    }
-  } catch {}
-  // expand via API letters
-  for (const L of "авеикнорст".split("")) {
+
+  // 1) hideout_recipes.json — ингредиенты + результаты
+  const recipeUrls = ["/hideout_recipes.json", "/api/hideout/recipes", "/assets/hideout_recipes.json"];
+  let recipes = [];
+  for (const url of recipeUrls) {
     try {
-      const res = await fetch(`/api/items?q=${encodeURIComponent(L)}`, { cache: "no-store" });
-      if (!res.ok) continue;
-      const j = await res.json();
-      for (const row of j.rows || []) {
-        const id = scBaseId(row.id);
-        if (!id || !row.name) continue;
-        if (!map.has(id)) map.set(id, { id, name: row.name, nameN: scNorm(row.name), hash: null });
-      }
+      const r = await fetch(url, { cache: "force-cache" });
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (text.trimStart().startsWith("<")) continue;
+      const j = JSON.parse(text);
+      if (Array.isArray(j) && j.length) { recipes = j; break; }
     } catch {}
   }
 
+  for (const rec of recipes) {
+    if (rec.result?.id && rec.result?.name) {
+      const id = scBaseId(rec.result.id);
+      if (id && !map.has(id)) {
+        map.set(id, {
+          id,
+          name: rec.result.name,
+          nameN: scNorm(rec.result.name),
+          hash: null,
+          role: "result",
+        });
+      }
+    }
+    for (const ing of rec.ingredients || []) {
+      if (!ing?.id) continue;
+      const id = scBaseId(ing.id);
+      if (!id) continue;
+      const prev = map.get(id);
+      if (prev) {
+        prev.role = prev.role === "result" ? "both" : "ingredient";
+        if (ing.name && (!prev.name || prev.name === id)) {
+          prev.name = ing.name;
+          prev.nameN = scNorm(ing.name);
+        }
+      } else {
+        map.set(id, {
+          id,
+          name: ing.name || id,
+          nameN: scNorm(ing.name || id),
+          hash: null,
+          role: "ingredient",
+        });
+      }
+    }
+  }
+
+  // 2) Подтянуть живые цены/имена с аукциона только для этих id
+  const craftIds = new Set(map.keys());
+  for (const r of scGetRows()) {
+    const id = scBaseId(r.id);
+    if (!id || !craftIds.has(id)) continue;
+    const it = map.get(id);
+    if (it && r.name) {
+      it.name = r.name;
+      it.nameN = scNorm(r.name);
+    }
+  }
+
   scCatalog = [...map.values()];
-  // hash icons in batches
+  if (!scCatalog.length) {
+    scHashReady = false;
+    scCatalogAt = Date.now();
+    return;
+  }
+
+  // хэши иконок только для крафтовых id
   const need = scCatalog.filter((x) => !x.hash);
   let done = 0;
-  const concurrency = 8;
+  const concurrency = 10;
   for (let i = 0; i < need.length; i += concurrency) {
     const batch = need.slice(i, i + concurrency);
     await Promise.all(
@@ -453,9 +485,9 @@ async function scLoadTesseract() {
 async function scRecognizeScreenshot(file, st) {
   if (st) st.textContent = "Открытие изображения…";
   const canvas = await scLoadFileToCanvas(file);
-  if (st) st.textContent = "Индекс иконок каталога…";
+  if (st) st.textContent = "Индекс иконок крафта…";
   await scEnsureCatalog((done, total) => {
-    if (st) st.textContent = `Индекс иконок ${done}/${total}…`;
+    if (st) st.textContent = `Иконки крафта ${done}/${total}…`;
   });
 
   if (st) st.textContent = "Поиск ячеек сетки…";
@@ -666,8 +698,8 @@ async function scRunFile(file) {
   try {
     scLines = await scRecognizeScreenshot(file, st);
     if (st) st.textContent = scLines.length
-      ? `Распознано: ${scLines.length} предм.`
-      : "Не удалось сопоставить иконки — добавьте вручную или улучшите скрин";
+      ? `Распознано: ${scLines.length} (каталог крафта: ${scCatalog.length})`
+      : `Не найдено в крафте (${scCatalog.length} предм.) — добавьте вручную`;
   } catch (e) {
     if (st) st.textContent = "Ошибка: " + (e.message || e);
     scLines = [];
