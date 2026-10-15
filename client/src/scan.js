@@ -268,6 +268,50 @@ async function scEnsureCatalog(onProgress) {
     }
   }
 
+  // Build the scan universe from the FULL item catalog, not only hideout recipes.
+  // Exclude the categories the user does not want scanned: armor, artifacts,
+  // weapons, attachments, paints/skins, backpacks and containers.
+  try {
+    const catalogResponse = await fetch("/assets/items_catalog.json", { cache: "force-cache" });
+    if (catalogResponse.ok) {
+      const allItems = await catalogResponse.json();
+      if (Array.isArray(allItems) && allItems.length) {
+        const excludedCategory = /^(armor|armour|artefact|artifact|weapon|attachment|backpacks?|containers?)(?:\/|$)|^(weapon_modules|weapon_style|armor_style)(?:\/|$)|^other\/skins(?:\/|$)/i;
+        const excludedName = /(?:^|\s)(?:краск(?:а|и|у|ой|ою|е)|paint(?:s)?|dye)(?:$|\s)/i;
+        const allowed = new Map();
+        for (const item of allItems) {
+          if (!item?.id || !item?.name) continue;
+          const id = scBaseId(item.id);
+          const category = String(item.category || "").trim();
+          const name = String(item.name || "").trim();
+          if (excludedCategory.test(category) || excludedName.test(name)) continue;
+          // Some paint items are stored under generic categories; reject by name too.
+          if (/краск|paint|\bdye\b/i.test(name) && /оруж|weapon|skin|скин|краск|paint|dye/i.test(name)) continue;
+          const existing = map.get(id);
+          const m = meta.get(id) || { minSkill: 99, minEnergy: 1e9, asIng: 0, asRes: 0 };
+          allowed.set(id, {
+            id,
+            name,
+            nameN: scNorm(name),
+            hash: existing?.hash || null,
+            color: existing?.color || null,
+            role: m.asIng && m.asRes ? "both" : m.asIng ? "ingredient" : m.asRes ? "result" : "catalog",
+            minSkill: m.minSkill,
+            minEnergy: m.minEnergy,
+            priority: existing?.priority ?? 50,
+            category,
+          });
+        }
+        if (allowed.size) {
+          map.clear();
+          for (const [id, item] of allowed) map.set(id, item);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Не удалось загрузить полный каталог для сканера; используется каталог рецептов.", e);
+  }
+
   // priority: ingredient + low skill + low energy first (starter craft mats)
   for (const it of map.values()) {
     const m = meta.get(it.id);
@@ -816,8 +860,8 @@ async function scRunFile(file) {
   try {
     scLines = await scRecognizeScreenshot(file, st);
     if (st) st.textContent = scLines.length
-      ? `Надёжно распознано: ${scLines.length} · каталог крафта: ${scCatalog.length}. Сомнительные совпадения пропущены, добавьте их вручную.`
-      : `Не найдено в крафте (${scCatalog.length} предм.) — добавьте вручную`;
+      ? `Надёжно распознано: ${scLines.length} · каталог предметов: ${scCatalog.length}. Сомнительные совпадения пропущены, добавьте их вручную.`
+      : `Не найдено в каталоге (${scCatalog.length} предм.) — добавьте вручную`;
   } catch (e) {
     if (st) st.textContent = "Ошибка: " + (e.message || e);
     scLines = [];
