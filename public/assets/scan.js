@@ -430,144 +430,121 @@ function scLuma(data, i) {
 
 /** Find inventory-like cells: bright content on dark bg in a grid */
 function scDetectCells(canvas) {
-  const w = canvas.width;
-  const h = canvas.height;
+  const w = canvas.width, h = canvas.height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const { data } = ctx.getImageData(0, 0, w, h);
-  const TH = 28; // non-background
+  if (w < 80 || h < 60) return [];
 
-  // activity map downsampled
-  const step = Math.max(2, Math.floor(Math.min(w, h) / 200));
-  const cols = Math.ceil(w / step);
-  const rows = Math.ceil(h / step);
-  const act = new Uint8Array(cols * rows);
-  for (let y = 0; y < h; y += step) {
-    for (let x = 0; x < w; x += step) {
-      const i = (y * w + x) * 4;
-      if (scLuma(data, i) > TH) act[Math.floor(y / step) * cols + Math.floor(x / step)] = 1;
+  // Detect the inventory's thin neutral-grey borders. Unlike the old activity
+  // projection, icon silhouettes no longer define cell boundaries.
+  const vertical = new Float32Array(w), horizontal = new Float32Array(h);
+  const lum = (x,y) => {
+    const i=(y*w+x)*4; return .299*data[i]+.587*data[i+1]+.114*data[i+2];
+  };
+  const neutral = (x,y) => {
+    const i=(y*w+x)*4, r=data[i],g=data[i+1],b=data[i+2];
+    const l=.299*r+.587*g+.114*b;
+    return l>28 && l<175 && Math.max(r,g,b)-Math.min(r,g,b)<52;
+  };
+  // Sample every other pixel; count border-like pixels with local contrast.
+  for(let x=1;x<w-1;x++) {
+    let score=0, samples=0;
+    for(let y=1;y<h-1;y+=2) {
+      samples++;
+      if(neutral(x,y) && Math.abs(lum(x-1,y)-lum(x+1,y))>7) score++;
     }
+    vertical[x]=score/Math.max(1,samples);
   }
-
-  // find bounding content
-  let minX = cols, minY = rows, maxX = 0, maxY = 0;
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      if (!act[y * cols + x]) continue;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
+  for(let y=1;y<h-1;y++) {
+    let score=0, samples=0;
+    for(let x=1;x<w-1;x+=2) {
+      samples++;
+      if(neutral(x,y) && Math.abs(lum(x,y-1)-lum(x,y+1))>7) score++;
     }
+    horizontal[y]=score/Math.max(1,samples);
   }
-  if (maxX <= minX || maxY <= minY) return [];
-
-  // estimate cell size by projection peaks
-  const projX = new Float64Array(cols);
-  const projY = new Float64Array(rows);
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      if (act[y * cols + x]) {
-        projX[x]++;
-        projY[y]++;
-      }
+  function peaks(arr, minGap) {
+    const smooth=new Float32Array(arr.length);
+    for(let i=1;i<arr.length-1;i++) smooth[i]=(arr[i-1]+arr[i]*2+arr[i+1])/4;
+    const vals=Array.from(smooth).filter(v=>v>0).sort((a,b)=>a-b);
+    const med=vals[Math.floor(vals.length*.8)]||0;
+    const threshold=Math.max(.075, med*.72);
+    const runs=[];
+    for(let i=1;i<arr.length-1;) {
+      if(smooth[i]<threshold){i++;continue;}
+      let j=i; while(j+1<arr.length-1&&smooth[j+1]>=threshold)j++;
+      let best=i; for(let k=i+1;k<=j;k++)if(smooth[k]>smooth[best])best=k;
+      runs.push({p:best,v:smooth[best]}); i=j+1;
     }
-  }
-
-  function clusterGaps(proj, a, b) {
-    // find runs of activity → cell centers in downsampled coords
-    const runs = [];
-    let i = a;
-    while (i <= b) {
-      while (i <= b && proj[i] < 1) i++;
-      if (i > b) break;
-      let j = i;
-      while (j <= b && proj[j] >= 1) j++;
-      runs.push({ a: i, b: j - 1, mid: (i + j - 1) / 2 });
-      i = j;
+    const merged=[];
+    for(const q of runs) {
+      const last=merged[merged.length-1];
+      if(last&&q.p-last.p<minGap){if(q.v>last.v)merged[merged.length-1]=q;}
+      else merged.push(q);
     }
-    return runs;
+    return merged.map(q=>q.p);
   }
-
-  let xRuns = clusterGaps(projX, minX, maxX);
-  let yRuns = clusterGaps(projY, minY, maxY);
-
-  // if too few runs, try uniform grid by median gap
-  if (xRuns.length < 2 || yRuns.length < 1) {
-    // fallback: assume ~7 cols like screenshot
-    const bw = (maxX - minX + 1) * step;
-    const bh = (maxY - minY + 1) * step;
-    const guessCols = Math.max(1, Math.round(bw / (bh / Math.max(1, Math.round(bh / (bw / 7))))));
-    const nCol = Math.min(12, Math.max(3, guessCols || 7));
-    const nRow = Math.min(8, Math.max(1, Math.round((nCol * bh) / bw)));
-    const cells = [];
-    const ox = minX * step;
-    const oy = minY * step;
-    const cw = bw / nCol;
-    const ch = bh / nRow;
-    for (let ry = 0; ry < nRow; ry++) {
-      for (let cx = 0; cx < nCol; cx++) {
-        cells.push({
-          x: Math.round(ox + cx * cw),
-          y: Math.round(oy + ry * ch),
-          w: Math.round(cw),
-          h: Math.round(ch),
-        });
-      }
+  let xs=peaks(vertical, Math.max(2,Math.round(w*.006)));
+  let ys=peaks(horizontal, Math.max(2,Math.round(h*.008)));
+  // Keep lines that form a repeated grid spacing; game cells are near-square.
+  function regularize(lines, maxDim) {
+    if(lines.length<3)return lines;
+    const gaps=[]; for(let i=1;i<lines.length;i++){const d=lines[i]-lines[i-1];if(d>maxDim*.45&&d<maxDim*.22+maxDim*.9)gaps.push(d);}
+    const sorted=gaps.sort((a,b)=>a-b); const unit=sorted[Math.floor(sorted.length/2)];
+    if(!unit)return lines;
+    return lines.filter((v,i)=>i===0||Math.abs((v-lines[i-1])-unit)<unit*.32||Math.abs((v-lines[i-1])-unit*2)<unit*.32);
+  }
+  xs=regularize(xs,Math.min(w,h)); ys=regularize(ys,Math.min(w,h));
+  function segments(lines, limit) {
+    const out=[];
+    for(let i=0;i<lines.length-1;i++){
+      const a=lines[i]+1,b=lines[i+1],size=b-a;
+      if(size>=maxDim*.10 && size<=maxDim*.36) out.push({a,b,size});
+    }
+    return out;
+  }
+  let xSeg=segments(xs, w), ySeg=segments(ys,h);
+  // Fallback for screenshots whose border colour is compressed: estimate the
+  // repeating cell pitch from the image aspect ratio, then crop inward.
+  if(xSeg.length<2 || ySeg.length<1) {
+    const pitch=Math.max(48,Math.min(110,Math.round(Math.min(w/7.2,h/3.8))));
+    const ncol=Math.max(1,Math.min(14,Math.floor((w-4)/pitch)));
+    const nrow=Math.max(1,Math.min(12,Math.ceil((h-4)/pitch)));
+    const cells=[];
+    for(let r=0;r<nrow;r++)for(let c=0;c<ncol;c++){
+      const x=3+c*pitch,y=3+r*pitch;
+      const cw=Math.min(pitch-3,w-x),ch=Math.min(pitch-3,h-y);
+      if(cw>pitch*.55&&ch>pitch*.45)cells.push({x,y,w:cw,h:ch});
     }
     return cells;
   }
-
-  // merge thin noise runs
-  function mergeRuns(runs, minSpan) {
-    const out = [];
-    for (const r of runs) {
-      if (out.length && r.a - out[out.length - 1].b <= 2) {
-        out[out.length - 1].b = r.b;
-        out[out.length - 1].mid = (out[out.length - 1].a + out[out.length - 1].b) / 2;
-      } else if (r.b - r.a >= minSpan) {
-        out.push({ ...r });
-      }
+  const cells=[];
+  for(const yr of ySeg) for(const xr of xSeg) {
+    // Ignore the frame and crop the actual cell interior.
+    const x=xr.a+2,y=yr.a+2,cw=xr.size-4,ch=yr.size-4;
+    if(cw<30||ch<30)continue;
+    let active=0,total=0;
+    for(let py=y+4;py<y+ch-4;py+=3)for(let px=x+4;px<x+cw-4;px+=3){
+      total++; if(lum(px,py)>34)active++;
     }
-    return out.length ? out : runs;
-  }
-  xRuns = mergeRuns(xRuns, 1);
-  yRuns = mergeRuns(yRuns, 1);
-
-  const cells = [];
-  for (const yr of yRuns) {
-    for (const xr of xRuns) {
-      const x = xr.a * step;
-      const y = yr.a * step;
-      const cw = Math.max(8, (xr.b - xr.a + 1) * step);
-      const ch = Math.max(8, (yr.b - yr.a + 1) * step);
-      // skip nearly empty
-      let bright = 0, tot = 0;
-      for (let py = y; py < y + ch; py += 2) {
-        for (let px = x; px < x + cw; px += 2) {
-          if (px >= w || py >= h) continue;
-          tot++;
-          if (scLuma(data, (py * w + px) * 4) > TH) bright++;
-        }
-      }
-      if (tot && bright / tot < 0.02) continue;
-      cells.push({ x, y, w: cw, h: ch });
-    }
+    if(total&&active/total<.025)continue;
+    cells.push({x,y,w:cw,h:ch});
   }
   return cells;
 }
 
 function scCropHash(canvas, cell) {
-  // icon is upper ~70% of cell; ignore margins and qty text
-  const pad = Math.floor(Math.min(cell.w, cell.h) * 0.1);
-  const iw = Math.max(8, cell.w - pad * 2);
-  const ih = Math.max(8, Math.floor(cell.h * 0.68) - pad);
-  const c = document.createElement("canvas");
-  c.width = 64;
-  c.height = 64;
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = "#0a0a0a";
-  ctx.fillRect(0, 0, 64, 64);
-  ctx.drawImage(canvas, cell.x + pad, cell.y + pad, iw, ih, 4, 4, 56, 56);
+  // Inventory icon sits in the upper/central cell area; quantity text is in
+  // the lower-right corner. Preserve aspect ratio instead of stretching it.
+  const padX=Math.max(3,Math.round(cell.w*.12));
+  const padY=Math.max(3,Math.round(cell.h*.08));
+  const sx=cell.x+padX, sy=cell.y+padY;
+  const sw=Math.max(8,cell.w-padX*2), sh=Math.max(8,Math.floor(cell.h*.72)-padY);
+  const c=document.createElement('canvas'); c.width=80;c.height=80;
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.fillStyle='#202020';ctx.fillRect(0,0,80,80);
+  const scale=Math.min(68/sw,68/sh),dw=sw*scale,dh=sh*scale;
+  ctx.drawImage(canvas,sx,sy,sw,sh,(80-dw)/2,(80-dh)/2,dw,dh);
   return scHashCanvas(c);
 }
 
