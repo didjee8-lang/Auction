@@ -7,7 +7,7 @@ const clientSrc = path.join(root, "client", "src");
 const assets = path.join(root, "public", "assets");
 fs.mkdirSync(assets, { recursive: true });
 
-for (const f of ["app.js", "sse.js", "api.js", "store.js", "styles.css", "pod-app.js", "shelter.js"]) {
+for (const f of ["app.js", "sse.js", "api.js", "store.js", "styles.css", "pod-app.js", "shelter.js", "scan.js"]) {
   const from = path.join(clientSrc, f);
   if (!fs.existsSync(from)) continue;
   let text = fs.readFileSync(from, "utf8");

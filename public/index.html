@@ -73,6 +73,7 @@
         <div class="tab" data-tab="perekup">Перекуп</div>
         <div class="tab" data-tab="deals">Сделки</div>
         <div class="tab" data-tab="hideout">Убежище</div>
+        <div class="tab" data-tab="scan">Оценка</div>
       </div>
       <div id="catHead" style="display:none;align-items:center;width:100%">
         <button class="back-btn" id="catBack">← Назад</button>
@@ -151,6 +152,40 @@
         </div>
       </div>
       
+      
+      <div id="scanPane" style="display:none">
+        <div class="sc-help">Закиньте скрин предметов — распознаем названия, подставим цены с аукциона и посчитаем, сколько отправить с учётом вашей комиссии.</div>
+        <div class="sc-drop" id="scDrop">
+          <input type="file" id="scFile" accept="image/*" hidden>
+          <div class="sc-drop-title">Перетащите скрин сюда или нажмите</div>
+          <div class="sub">PNG / JPG · русский OCR</div>
+        </div>
+        <div id="scPreview" class="sc-preview"></div>
+        <div class="sc-status" id="scStatus">Готово к загрузке</div>
+        <div class="sc-comm">
+          <label>Ваша комиссия / запас
+            <select id="scCommType">
+              <option value="pct">%</option>
+              <option value="fix">₽</option>
+            </select>
+            <input id="scComm" type="text" inputmode="decimal" value="5" style="width:72px">
+          </label>
+          <span class="sub">Вычитается из рыночной суммы, чтобы не уйти в минус</span>
+        </div>
+        <div class="sc-manual">
+          <input id="scAddQ" placeholder="Добавить предмет вручную…" autocomplete="off">
+          <button type="button" class="btn" id="scAddBtn">+</button>
+          <button type="button" class="btn" id="scClear">Очистить</button>
+        </div>
+        <div id="scList" class="sc-list"><div class="empty">Пока пусто</div></div>
+        <div id="scSummary" class="calc-sum sc-summary"></div>
+        <details class="sc-ocr-details">
+          <summary>Текст с картинки (можно править)</summary>
+          <textarea id="scText" rows="6" placeholder="Сюда попадёт OCR-текст…"></textarea>
+          <button type="button" class="btn" id="scParseText">Пересчитать по тексту</button>
+        </details>
+      </div>
+
       <div id="hideoutPane" style="display:none">
         <div class="ho-toolbar">
           <div class="ho-filter-group">

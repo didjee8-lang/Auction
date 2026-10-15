@@ -1,4 +1,5 @@
 import "./shelter.js";
+import "./scan.js";
 import { connectSSE } from "./sse.js";
 const $=id=>document.getElementById(id);
 let rows=[],filter="all",sortBy="new",activeId=null,catFilter="",rightTab="catalog";
@@ -1767,6 +1768,7 @@ function showRightTab(tab){
   if($("perekupPane")) $("perekupPane").style.display=tab==="perekup"?"block":"none";
   if($("dealsPane")) $("dealsPane").style.display=tab==="deals"?"block":"none";
   if($("hideoutPane")) $("hideoutPane").style.display=tab==="hideout"?"block":"none";
+  if($("scanPane")) $("scanPane").style.display=tab==="scan"?"block":"none";
   // Убежище остаётся в правой панели
   const main=document.querySelector(".main");
   if(main) main.classList.remove("main-hideout");
@@ -1778,6 +1780,9 @@ function showRightTab(tab){
   if(tab==="hideout"){
     if(typeof hoBindOnce==="function") hoBindOnce();
     if(typeof renderHideout==="function") renderHideout();
+  }
+  if(tab==="scan"){
+    if(typeof renderScan==="function") renderScan();
   }
 }
 function renderCalc(opts){
@@ -2427,7 +2432,7 @@ function setMobileView(tab){
     main.classList.remove("mobile-right");
   }else{
     main.classList.add("mobile-right");
-    showRightTab(["catalog","calc","perekup","deals","hideout"].includes(tab)?tab:"catalog");
+    showRightTab(["catalog","calc","perekup","deals","hideout","scan"].includes(tab)?tab:"catalog");
   }
   document.querySelectorAll(".mobile-nav-item").forEach(b=>{
     b.classList.toggle("active", b.dataset.mobileTab===tab);
